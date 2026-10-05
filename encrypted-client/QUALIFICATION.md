@@ -40,7 +40,9 @@ The final unit and integration suite passed **61 tests with zero skips**, alongs
 
 Planted plaintext content markers were absent from the fixture's entire PostgreSQL dump, captured Synapse logs and server files. The scan covered approximately 110 MB of server files. It did not establish that every possible HTTP capture, notification path, crash dump or deployment log is safe. Hosts still see account identifiers, membership, traffic timing and sizes.
 
-The exact production dependency lock was checked against npm's official bulk-advisory service: 17 packages, zero returned advisory packages. The local `npm audit` request failed at its network endpoint; a separate existing route performed the lock-derived lookup. That is an advisory check, not proof of dependency security. Lock SHA-256: `8caf3c2e726a4dfd6cd9ff4bc64b462a6642fe6648c9453675e46fa31b47ebef`.
+The production dependency entries were checked against npm's official bulk-advisory service: 17 packages, zero returned advisory packages. The local `npm audit` request failed at its network endpoint; a separate existing route performed the lock-derived lookup. That is an advisory check, not proof of dependency security. A later correction declared the browser test tools in this package; all 17 production entries stayed identical. Current lock SHA-256: `e5e9de9cf2900e56c948e84ec0cb1e5ea97e387baa9520271ca8a089166e6e57`.
+
+GitHub's clean runner exposed those missing test dependencies, which had been available through the parent checkout locally. After declaring exact Playwright and sharp development dependencies, an isolated checkout without parent `node_modules` passed a fresh install, TypeScript, all 61 tests and the build. Its ten built files matched the browser-tested files byte for byte. The first isolated fixture omitted the repository's synthetic archive fixture; correcting that snapshot resolved its one failed test. No application behavior or production dependency changed in this packaging correction.
 
 ## Limits and failures
 

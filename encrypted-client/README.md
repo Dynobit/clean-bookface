@@ -28,9 +28,9 @@ This is not feature parity with v0.1. Comments, reactions, account deletion, mod
 
 ## Build and check
 
-Run `npm run check`, `npm test`, and `npm run build`. The build contains the Rust crypto WebAssembly file locally; there is no third-party script CDN.
+From this directory, run `npm ci --ignore-scripts`, then `npm run check`, `npm test`, and `npm run build`. This package declares its own development dependencies; installing the parent repository is not required. The build contains the Rust crypto WebAssembly file locally; there is no third-party script CDN.
 
-For browser qualification, install the main repository’s development dependencies and Playwright browser. Set `CBF_TEST_HOST_RUNTIME` to a disposable local host runtime, then run `npm run test:e2e`. The optional host `--test-rate-profile` allows repeated correct logins for this test; production refuses that option. Browser tests refuse production runtimes and use generated fictional credentials. Recovery kits, browser output and test artifacts stay outside Git.
+For browser qualification, install the Playwright browser with `npx playwright install chromium` after the package install above. Set `CBF_TEST_HOST_RUNTIME` to a disposable local host runtime, then run `npm run test:e2e`. The optional host `--test-rate-profile` allows repeated correct logins for this test; production refuses that option. Browser tests refuse production runtimes and use generated fictional credentials. Recovery kits, browser output and test artifacts stay outside Git.
 
 The browser suite serves a built snapshot on port 5175 with the supplied security headers. It does not test a development server that can reload while another person edits a file.
 
