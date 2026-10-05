@@ -1,0 +1,78 @@
+name: Disposable public peer qualification
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_sha:
+        description: Exact reviewed main commit SHA
+        required: true
+        type: string
+      peer_origin:
+        description: Empty disposable synthetic Pi peer Quick Tunnel origin
+        required: true
+        type: string
+      peer_setup_token:
+        description: One-use setup token for that disposable synthetic peer
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: disposable-public-peer-qualification
+  cancel-in-progress: false
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'Dynobit/clean-bookface' &&
+      github.event.repository.private == true &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      QUALIFICATION_REPOSITORY_PRIVATE: ${{ github.event.repository.private && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Mask synthetic capability before any step environment exposes it
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          inputs = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())["inputs"]
+          origin = inputs.get("peer_origin", "")
+          token = inputs.get("peer_setup_token", "")
+          if not re.fullmatch(r"https://[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com", origin):
+              raise SystemExit("Invalid disposable peer origin")
+          if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+              raise SystemExit("Invalid one-use synthetic setup token")
+          for value in (origin, token):
+              print("::add-mask::" + value, flush=True)
+          PYTHON
+      - name: Check exact reviewed source
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: |
+          test "$REVIEWED_SHA" = "$(git rev-parse HEAD)"
+          test "$GITHUB_REPOSITORY" = 'Dynobit/clean-bookface'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$QUALIFICATION_REPOSITORY_PRIVATE" = true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Build the reviewed source using its pinned base images
+        run: docker build -t clean-bookface:qualification .
+      - name: Run synthetic public HTTPS acceptance
+        env:
+          PEER_ORIGIN: ${{ inputs.peer_origin }}
+          PEER_SETUP_TOKEN: ${{ inputs.peer_setup_token }}
+        run: timeout --signal=TERM --kill-after=30s 22m python3 scripts/public-peer-qualification.py
+      - name: Remove exact runner resources even after test failure
+        if: always()
+        run: python3 scripts/public-peer-qualification.py --cleanup-only

@@ -1,0 +1,37 @@
+name: Verify the circle
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Install the reviewed backup binary
+        run: |
+          docker create --name bookface-restic-tool restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510
+          docker cp bookface-restic-tool:/usr/bin/restic /tmp/clean-bookface-restic
+          sudo install -m 755 /tmp/clean-bookface-restic /usr/local/bin/restic
+          docker rm bookface-restic-tool
+      - run: npm run check:repository
+      - run: npm run format:check
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - run: docker build -t clean-bookface:test .
+      - run: node scripts/container-smoke.mjs --image clean-bookface:test
+      - run: node scripts/provider-smoke.mjs --image clean-bookface:test

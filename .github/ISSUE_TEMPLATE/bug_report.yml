@@ -1,0 +1,37 @@
+name: Something is not working
+description: Help us understand and reproduce a problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use fictional examples only. Do not attach Facebook archives, screenshots of real members, credentials, invitation links, logs from real accounts or private configuration.
+
+        For a security or privacy flaw, follow [the security reporting policy](https://github.com/Dynobit/clean-bookface/blob/main/SECURITY.md) instead of posting details here.
+  - type: input
+    id: version
+    attributes:
+      label: Version and setup
+      description: Which release are you using, and are you visiting someone else's site or hosting your own? Include your browser if relevant. Leave out private addresses.
+      placeholder: 'For example: release version, self-hosted with Docker, Firefox on Android. Say unknown if you cannot find the version.'
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we reproduce it?
+      description: List the smallest set of steps using made-up names and data. For import problems, describe the file structure with a tiny fictional example.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: Describe what you saw. If quoting an error, remove personal information first.
+    validations:
+      required: true

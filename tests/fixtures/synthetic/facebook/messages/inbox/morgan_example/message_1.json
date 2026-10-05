@@ -1,0 +1,1 @@
+{ "thread_path": "inbox/morgan_example", "title": "Morgan Example", "participants": [{ "name": "Alex Example" }, { "name": "Morgan Example" }], "messages": [{ "message_id": "fictional-message", "sender_name": "Morgan Example", "timestamp_ms": 1420070400000, "content": "This is a fictional private message. It must never appear in a shared post." }] }

@@ -1,0 +1,45 @@
+# Reviewed against Render's Blueprint reference on 2026-10-02.
+# Applying this file creates paid resources. Review docs/INSTALL.md first.
+# The account owner supplies APP_ORIGIN and connects their own authorized repo.
+services:
+  - type: web
+    name: clean-bookface
+    runtime: docker
+    plan: 1c-2g
+    region: frankfurt
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: 'off'
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 60
+    disk:
+      name: bookface-data
+      mountPath: /data
+      sizeGB: 20
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_ORIGIN
+        sync: false
+      - key: INSTANCE_NAME
+        value: Our circle
+      - key: BIND_ADDRESS
+        value: 0.0.0.0
+      - key: PORT
+        value: '3000'
+      - key: DATA_DIR
+        value: /data
+      - key: FEDERATION_ENABLED
+        value: 'false'
+      - key: MAINTENANCE_MODE
+        value: 'false'
+      - key: MAX_UPLOAD_BYTES
+        value: '1073741824'
+
+      # 5 GiB total archive allowance leaves room for staging and derivatives.
+      # Store backups separately and monitor remaining disk space.
+      - key: MAX_ACCOUNTS
+        value: '5'
+      - key: ARCHIVE_ACCOUNT_BYTES
+        value: '1073741824'

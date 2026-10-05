@@ -1,0 +1,40 @@
+name: Publish project website after approval
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: project-website
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.event.repository.private == false && github.repository == 'Dynobit/clean-bookface' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Build only reviewed static assets
+        run: node scripts/build-site.mjs
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: dist-site
+  deploy:
+    needs: build
+    if: github.event.repository.private == false && github.repository == 'Dynobit/clean-bookface' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish the approved website
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

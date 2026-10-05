@@ -1,0 +1,9 @@
+#!/bin/sh
+# Run from this checkout even when launched from another directory.
+set -eu
+cd -- "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if ! command -v node >/dev/null 2>&1; then
+  echo 'Install Node.js 24 on this server to run the guided setup. See docs/HOST_YOUR_CIRCLE.md.' >&2
+  exit 1
+fi
+exec node scripts/host-setup.mjs "$@"

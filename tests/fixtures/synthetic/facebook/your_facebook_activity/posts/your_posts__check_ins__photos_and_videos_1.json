@@ -1,0 +1,6 @@
+[
+  { "id": "fictional-old-post", "timestamp": 946684800, "data": [{ "post": "A fresh notebook for a new year. Café, שלום, and a little sunshine ☀️" }] },
+  { "id": "fictional-photo-post", "timestamp": 1283299200, "data": [{ "post": "A blue postcard from nowhere in particular." }], "attachments": [{ "data": [{ "media": { "uri": "photos/synthetic-postcard.png" } }] }] },
+  { "id": "fictional-attachment-only", "timestamp": 1420070400, "attachments": [{ "data": [{ "media": { "uri": "photos/synthetic-postcard.png" } }] }] },
+  { "id": "fictional-undated", "data": [{ "post": "This memory has no original date. It should stay that way." }] }
+]

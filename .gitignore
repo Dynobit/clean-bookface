@@ -1,0 +1,55 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+/secrets/
+/private/
+/.local/
+
+# User content and operational state never belong in source control
+/data/
+/imports/
+/exports/
+/uploads/
+/media/
+/backups/
+/screenshots/
+/reports/
+/logs/
+/browser-profiles/
+**/fixtures/private/
+*.log
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.age
+
+# Browser tests can contain private data; use synthetic fixtures only
+/test-results/
+/playwright-report/
+/blob-report/
+
+# Reviewed static project website build output
+/dist-site/

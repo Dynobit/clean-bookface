@@ -1,0 +1,74 @@
+name: clean-bookface-pilot
+services:
+  app:
+    image: ${APP_IMAGE:?Set APP_IMAGE to a reviewed release image}
+    restart: 'no'
+    init: true
+    user: '1000:1000'
+    environment:
+      NODE_ENV: production
+      BIND_ADDRESS: 0.0.0.0
+      PORT: '3000'
+      DATA_DIR: /data
+      APP_ORIGIN: ${APP_ORIGIN:?Set the permanent pilot HTTPS origin}
+      INSTANCE_NAME: ${INSTANCE_NAME:-Clean Bookface pilot}
+      FEDERATION_ENABLED: 'false'
+      CLOUDFLARE_PROXY: 'true'
+      MAX_ACCOUNTS: ${MAX_ACCOUNTS:-25}
+      ARCHIVE_ACCOUNT_BYTES: ${ARCHIVE_ACCOUNT_BYTES:-1073741824}
+      MAX_UPLOAD_BYTES: '1073741824'
+      MAX_DIRECT_UPLOAD_BYTES: '83886080'
+      PILOT_STARTS_AT: ${PILOT_STARTS_AT:?Set the fixed pilot launch UTC timestamp}
+      PILOT_READ_ONLY_AT: ${PILOT_READ_ONLY_AT:?Set the fixed export-only UTC deadline}
+      PILOT_ENDS_AT: ${PILOT_ENDS_AT:?Set the fixed pilot closing UTC deadline}
+      MAINTENANCE_MODE: ${MAINTENANCE_MODE:-false}
+    volumes:
+      - app_data:/data
+    networks: [application]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 60s
+    cpus: 1.0
+    mem_limit: 2g
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  tunnel:
+    image: ${TUNNEL_IMAGE:?Set TUNNEL_IMAGE to a reviewed cloudflared image with sha256 digest}
+    restart: 'no'
+    init: true
+    user: '65532:65532'
+    command: [tunnel, --no-autoupdate, run, --token-file, /run/secrets/tunnel_token]
+    secrets: [tunnel_token]
+    depends_on:
+      app:
+        condition: service_healthy
+    networks: [application, outbound]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+volumes:
+  app_data:
+networks:
+  application:
+    internal: true
+  outbound:
+secrets:
+  tunnel_token:
+    file: ${TUNNEL_TOKEN_FILE:?Set an absolute token-file path outside the checkout}

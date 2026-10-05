@@ -1,0 +1,48 @@
+name: clean-bookface
+services:
+  app:
+    build: .
+    image: clean-bookface:0.1.0
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      APP_ORIGIN: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      INSTANCE_NAME: ${INSTANCE_NAME:-Clean Bookface}
+      FEDERATION_ENABLED: ${FEDERATION_ENABLED:-false}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-1073741824}
+    volumes:
+      - app_data:/data
+    expose:
+      - '3000'
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 60s
+    mem_limit: 1536m
+    pids_limit: 128
+  https:
+    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+volumes:
+  app_data:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,9 @@
+{$APP_DOMAIN} {
+    encode zstd gzip
+    request_body {
+        max_size 1025MB
+    }
+    reverse_proxy app:3000
+    # No access logs: invitation URLs and private content paths should not be logged.
+    header -Server
+}
