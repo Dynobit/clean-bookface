@@ -1,6 +1,6 @@
 # Clean Bookface full build plan
 
-Implementation contract, updated 2026-10-05. The repository now contains a working private application, including the private archive, same-host circle and constrained cross-server sharing. The acceptance criteria below remain the release contract; implementation and passing automated tests do not establish a public production release.
+Implementation contract, updated 2026-10-05. The repository now contains a working v0.1 public-preview application, including the private archive, same-host circle and constrained cross-server sharing. The acceptance criteria below remain the release contract; implementation and passing automated tests do not establish a public production release.
 
 The product should make it easy to bring a Facebook archive home, choose what to share, and reconnect with people without surrendering control of the feed. A nontechnical member should need only an invitation and a browser. A technically willing member should be able to host the same software for a small circle, without a paid product dependency.
 
@@ -223,11 +223,11 @@ outside it. Review staged paths and content, scan for secrets, and inspect Git
 history before every publication milestone; a secrets scanner alone does not
 detect all personal information.
 
-The GitHub repository has been created with private visibility and that setting has been read back. The reviewed planning files are published, authenticated command-line Git access is verified, and the initial browser publication and local planning histories have been merged without discarding either. Use normal Git commits and pushes for subsequent work. Keep reviewing exact file contents and private visibility before publication; credentials stay outside the source tree.
+The earlier private development repository had verified private visibility and authenticated Git access, with its initial browser publication and local planning histories merged. That history remains separate from the reviewed public-preview source. Use normal Git commits and pushes for subsequent work. Keep reviewing exact file contents, the intended remote and its visibility before publication; credentials stay outside the source tree.
 
 The source includes an MIT license, contribution guidance and vulnerability
 reporting instructions. Public release must keep installation free and support
 independent maintenance. A private repository is not a substitute for keeping
 user data out of its history.
 
-Release publication, visibility changes and paid hosting purchases are separate later actions. This plan creates no hosting bill and makes no personal archive available to a provider.
+The owner approved source and project-website publication on 5 October 2026; see [Release status](RELEASE.md) for publication readbacks. Paid hosting remains a separate decision. This plan creates no hosting bill and makes no personal archive available to a provider.

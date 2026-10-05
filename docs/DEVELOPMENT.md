@@ -4,7 +4,7 @@ This guide is for running the app locally and contributing code. To join a circl
 
 ## Try the fictional demo
 
-Use a patched Node 24 LTS release and npm; 24.4 is the application's minimum API version. The repository currently requires private access.
+Use a patched Node 24 LTS release and npm; 24.4 is the application's minimum API version. The public source can be cloned without GitHub credentials.
 
 ```sh
 git clone https://github.com/Dynobit/clean-bookface.git

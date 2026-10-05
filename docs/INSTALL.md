@@ -42,7 +42,7 @@ explains this without requiring members to understand the configuration.
 
 ## Docker Compose
 
-Use Docker Engine with the Compose plugin on the chosen host. Clone the private repository with your own authorized Git credentials. Check out a reviewed commit; record its ID before building.
+Use Docker Engine with the Compose plugin on the chosen host. Clone the public source; GitHub credentials are not required to download it. Check out a reviewed commit; record its ID before building.
 
 ```sh
 git clone https://github.com/Dynobit/clean-bookface.git
@@ -143,8 +143,8 @@ $5 disk before bandwidth, backups, domain and tax. This template was reviewed
 against the current [Blueprint reference](https://render.com/docs/blueprint-spec)
 on 2026-10-02; provider deployment remains unqualified.
 
-1. Use your own Render account. Grant its GitHub connection access only to the
-   private repository you intend to deploy. Select **New Blueprint**, that
+1. Use your own Render account. If you connect GitHub, grant access only to the
+   repository you intend to deploy. Select **New Blueprint**, that
    repository and a reviewed branch. Check the region, plan and disk before
    accepting the provider's bill.
 2. Supply a stable `APP_ORIGIN`, such as `https://friends.example` with your own

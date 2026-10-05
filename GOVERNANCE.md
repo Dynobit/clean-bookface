@@ -2,7 +2,7 @@
 
 Clean Bookface should belong to the people who keep it useful. Nobody should have to trust a founder forever just to keep their own memories.
 
-**Current state:** a privately maintained project, not an established community foundation. No community maintainers, fiscal sponsor or successor organization have been appointed by this document. Publication and transfer of accounts remain explicit owner decisions. The commitments below guide that transition.
+**Current state:** an owner-maintained v0.1 public-preview project under the Dynobit GitHub account, not an established community foundation. The owner has approved source and project-website publication. No community maintainers, fiscal sponsor or successor organization have been appointed by this document. Transfer of accounts remains an explicit owner decision. The commitments below guide that transition.
 
 ## What contributors are looking after
 
@@ -12,7 +12,7 @@ The source is MIT licensed. These commitments describe the official project's di
 
 ## From founder to maintainers
 
-1. Publish a reviewed version under a dedicated project organization when the owner authorizes release. Review account/profile links and Git history before claiming public pseudonymity.
+1. Publish reviewed releases under the current Dynobit namespace. A later transfer to a dedicated project organization requires the owner’s agreement and consenting maintainers ready to take responsibility. Review account/profile links and Git history before claiming public pseudonymity.
 2. Invite contributions through small, reproducible issues and useful documentation work. Earn responsibility through sustained, reviewed contributions, including maintenance and support.
 3. Record consenting maintainers by their chosen handles, scopes and appointment dates in a public maintainer list. Add at least two trusted human organization owners before the founder steps back. Use individual accounts, two-factor authentication and documented recovery; never a shared public password.
 4. Publish proposals for adding or removing maintainers. Give existing maintainers time to respond and record the reasons and decision. Once there is a maintainer group, aim for agreement; unresolved ordinary decisions use a recorded majority of active maintainers, with conflicts disclosed. A tie keeps the current behavior while alternatives are discussed.

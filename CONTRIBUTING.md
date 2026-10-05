@@ -2,7 +2,7 @@
 
 Start with a small issue or a focused pull request. Explain the behavior a person should see, and how you verified it. Keep the application understandable to the next person who has to run it.
 
-Read [the member guide](docs/GETTING_STARTED.md) to understand the experience we are trying to make easy, and [community stewardship](GOVERNANCE.md) for the path to shared maintenance. The project is still private; the governance document does not claim an existing public maintainer community.
+Read [the member guide](docs/GETTING_STARTED.md) to understand the experience we are trying to make easy, and [community stewardship](GOVERNANCE.md) for the path to shared maintenance. The v0.1 public preview welcomes issues and focused pull requests; a public maintainer community has not yet been established.
 
 - Use synthetic data only. Never submit your own Facebook download, real conversations, real contact lists, private hostnames, screenshots of member accounts, credentials or local configuration.
 - Keep private archive reads and shared publication reads separate. Every media, search, export and federation route must enforce its audience.

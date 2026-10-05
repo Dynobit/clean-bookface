@@ -2,7 +2,7 @@
 
 The deterministic dispatcher takes a fresh GitHub snapshot, then reviews only open, non-draft pull requests whose exact repository, PR number, head commit and base commit have no completed receipt. Results stay in a private local dashboard. Nothing posts comments, approves, merges, pushes, changes repository settings or executes contributor code.
 
-A receipt is **advice about the supplied diff**, not release approval, a test result or proof of safety. Diffs are sent to the configured Codex provider. They are not a local-only model workload. Keep this workflow private while the repository is private.
+A receipt is **advice about the supplied diff**, not release approval, a test result or proof of safety. Diffs are sent to the configured Codex provider. They are not a local-only model workload. Public contributions can enter this review queue; its credentials, operational state and dashboard stay private after source publication.
 
 ## Daily runner contract
 
