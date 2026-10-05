@@ -45,6 +45,8 @@ One final-harness attempt failed closed because a recently cleaned-up loopback p
 
 The unique-identity rerun initially retained old certificate SAN names and failed the strict invitation-status assertion because TLS hostname validation refused those certificates. The certificate generator was corrected to use the same unique identity for CN, SAN and Docker alias; verification was not disabled.
 
+A later browser rerun exposed that manually attached Docker networks disappear when Compose recreates a container. The fixture now declares its shared network, server aliases and fixed addresses in Compose, keeping each exact `/32` exception valid after recreation. A fresh run passed **11 protocol checks**, including actual down/up of both homes before the invitation, event and media checks. TLS verification and production SSRF protection remain intact. This fixes the disposable test harness; it is not a production network change.
+
 ## Encrypted-content standby and cross-home browsers
 
 A later fixture held approximately 106 MiB of actual browser-encrypted content. Its consistent stopped-primary backup and full restic data check took **6.81 seconds**; restoring into a separate empty-database project took **19.91 seconds**. All 20 encrypted media files matched byte for byte by SHA-256 and the server signing identity matched. The primary stayed stopped throughout standby service. A fresh trusted browser with the separately retained member recovery kit opened the restored signed memories and large photos and exported a valid archive. The standby was stopped before the primary resumed. These remain same-machine measurements, not an offsite recovery or uptime promise.

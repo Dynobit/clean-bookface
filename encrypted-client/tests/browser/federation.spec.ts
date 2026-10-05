@@ -191,6 +191,14 @@ test('independent homes share only selected memories after a real identity compa
   });
   expect(pixels).toEqual({ width: 24, height: 16, pixel: [59, 89, 152, 255] });
   await expect(b.locator('.post-body').filter({ hasText: marker })).toHaveCount(0);
+  // Flush each device's key backup before discarding its browser storage. This
+  // lets a later run recover the retained pair's encrypted conversation history.
+  for (const page of [a, b]) {
+    await page.getByRole('button', { name: 'My account', exact: true }).click();
+    await page.getByRole('button', { name: 'Sign out of this browser', exact: true }).click();
+    await expect(page.locator('#notice')).toHaveText('Signed out.', { timeout: 65_000 });
+    await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+  }
   await ca.close();
   await cb.close();
 });

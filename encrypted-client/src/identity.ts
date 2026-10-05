@@ -65,6 +65,10 @@ const quiet: Logger = {
 // Legacy SDK call sites use the global logger rather than the client logger.
 // Rust's StoreHandle and OlmMachine receive the client's quiet logger explicitly.
 Object.assign(sdkLogger, quiet, { log() {} });
+/** This archive app has no calling feature or peer-to-peer media transport. */
+export function createArchiveClient(options: Parameters<typeof createClient>[0]): MatrixClient {
+  return createClient({ ...options, logger: quiet, disableVoip: true });
+}
 /** Prove ratchet coverage in an isolated, memory-only Rust store; never alter live keys. */
 export async function backupKeyCoversLocal(
   local: IMegolmSessionData,
@@ -159,7 +163,7 @@ export class Identity {
     invitationToken?: string;
   }): Promise<Session> {
     const baseUrl = validateOrigin(args.baseUrl);
-    const c = createClient({ baseUrl, logger: quiet });
+    const c = createArchiveClient({ baseUrl });
     if (!args.invitationToken) {
       const r = await c.login('m.login.password', {
         identifier: { type: 'm.id.user', user: args.username },
@@ -210,7 +214,7 @@ export class Identity {
       throw new Error('This browser cannot protect the encryption database from concurrent tabs.');
     session = { ...session, baseUrl: validateOrigin(session.baseUrl) };
     let instance: Identity;
-    const client = createClient({
+    const client = createArchiveClient({
       ...session,
       logger: quiet,
       verificationMethods: ['m.sas.v1'],

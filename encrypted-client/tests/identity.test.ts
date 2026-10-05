@@ -1,6 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateOrigin } from '../src/identity';
+import { createArchiveClient, validateOrigin } from '../src/identity';
+import { createClient } from 'matrix-js-sdk';
+
+test('archive clients disable SDK call handlers and TURN requests in a calling-capable browser', async () => {
+  const before = ['window', 'document'].map((key) =>
+    Object.getOwnPropertyDescriptor(globalThis, key),
+  );
+  try {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { RTCPeerConnection: class {} },
+    });
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: {} });
+    const ordinary = createClient({ baseUrl: 'https://matrix.example' });
+    assert.equal(ordinary.supportsVoip(), true);
+    let requests = 0;
+    const client = createArchiveClient({
+      baseUrl: 'https://matrix.example',
+      disableVoip: false,
+      fetchFn: async () => {
+        requests++;
+        throw new Error('Unexpected calling request');
+      },
+    });
+    assert.equal(client.supportsVoip(), false);
+    assert.equal(client.callEventHandler, undefined);
+    assert.equal(client.groupCallEventHandler, undefined);
+    await client.checkTurnServers();
+    assert.equal(requests, 0);
+  } finally {
+    ['window', 'document'].forEach((key, i) => {
+      if (before[i]) Object.defineProperty(globalThis, key, before[i]!);
+      else Reflect.deleteProperty(globalThis, key);
+    });
+  }
+});
 test('server origins enforce TLS and prevent URL credentials and routing injection', () => {
   assert.equal(validateOrigin('https://alice:secret@matrix.example/'), 'https://matrix.example');
   for (const origin of [

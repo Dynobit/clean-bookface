@@ -1,3 +1,4 @@
+import { verificationUpdate } from './verification-view';
 import './style.css';
 import { Identity, type Session, type VerificationView } from './identity';
 import { ContentStore, type SharedPost } from './content';
@@ -743,6 +744,7 @@ function recordCard(
           async () => {
             if (!choose().length) throw new Error('Choose at least one friend.');
             await content!.share(record, choose());
+            await identity!.waitForKeyBackup();
             tell('Shared a separate copy. Your original is still private.');
           },
           'small form-action',
@@ -888,11 +890,9 @@ async function signOut(): Promise<void> {
   tell('Signed out.');
 }
 function showVerification(view: VerificationView): void {
-  if (
-    currentVerification &&
-    currentVerification !== view.id &&
-    !['done', 'cancelled'].includes(view.phase)
-  ) {
+  const update = verificationUpdate(currentVerification, view);
+  if (update === 'ignore') return;
+  if (update === 'busy') {
     tell('Another identity check arrived. Finish or cancel the current one first.');
     return;
   }

@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import json
+import ipaddress
 import os
 import pathlib
 import secrets
@@ -14,6 +15,18 @@ import subprocess
 import time
 import urllib.request
 import host
+
+
+def persist_fixture_network(runtime, network, identity, address):
+    """Bind only the generated Synapse service to its private fixture network."""
+    path=runtime/'compose.json'
+    config=json.loads(path.read_text())
+    networks=config['services']['synapse']['networks']
+    if isinstance(networks,list): networks={name:{} for name in networks}
+    networks['federation_fixture']={'aliases':[identity],'ipv4_address':address}
+    config['services']['synapse']['networks']=networks
+    config['networks']['federation_fixture']={'external':True,'name':network}
+    host.write(path,config)
 
 
 def main():
@@ -56,11 +69,17 @@ def main():
         a,b=states
         check(host.request(b,'/_matrix/federation/v1/version')[0] == 404, 'default-closed home has no federation endpoint')
         check(json.loads((b['runtime']/'synapse/homeserver.yaml').read_text())['federation_domain_whitelist'] == [], 'default-closed home retains empty peer allowlist')
-        ips=[]
-        for name,state in zip(['a','b'],states):
-            cid=run(['docker','compose','-p',state['project'],'-f',str(state['runtime']/'compose.json'),'ps','-q','synapse'])
-            run(['docker','network','connect','--alias',identities[name],network,cid])
-            ips.append(json.loads(run(['docker','inspect',cid]))[0]['NetworkSettings']['Networks'][network]['IPAddress'])
+        # Persist the shared network in Compose: manual network connect is lost
+        # whenever Compose recreates a container. Explicit IPAM keeps the exact
+        # test-only SSRF exceptions valid across down/up as well.
+        details=json.loads(run(['docker','network','inspect',network]))[0]
+        subnet=details['IPAM']['Config'][0]['Subnet']
+        run(['docker','network','rm',network])
+        run(['docker','network','create','--internal','--subnet',subnet,network])
+        ips=[str(ipaddress.ip_network(subnet)[i]) for i in [2,3]]
+        for i,(name,state) in enumerate(zip(['a','b'],states)):
+            persist_fixture_network(state['runtime'],network,identities[name],ips[i])
+            host.compose(state,'up','-d','synapse'); host.ready(state)
         for i,(name,state) in enumerate(zip(['a','b'],states)):
             data=state['runtime']/'synapse'
             for src,dst in [(root/'ca.pem',data/'fixture-ca.pem'),(root/(name+'.pem'),data/'fixture-cert.pem'),(root/(name+'.key'),data/'fixture-key.pem')]:
@@ -74,6 +93,15 @@ def main():
             # B starts with its closed allowlist, despite the TLS test listener.
             host.write(data/'homeserver.yaml',config)
             host.compose(state,'restart','synapse'); host.ready(state)
+        for state in states:
+            host.compose(state,'down')
+            host.compose(state,'up','-d'); host.ready(state)
+        for i,(name,state) in enumerate(zip(['a','b'],states)):
+            cid=run(['docker','compose','-p',state['project'],'-f',str(state['runtime']/'compose.json'),'ps','-q','synapse'])
+            attached=json.loads(run(['docker','inspect',cid]))[0]['NetworkSettings']['Networks'][network]
+            if attached['IPAddress'] != ips[i] or identities[name] not in attached['Aliases']:
+                raise AssertionError('Recreated federation topology changed')
+        check(True,'Compose down/up recreated both homes with persistent federation topology')
         accounts=[json.loads((s['runtime']/'fictional-credentials.json').read_text())[0] for s in states]
         tokens=[host.login(s,u['username'],u['password']) for s,u in zip(states,accounts)]
         code,room=host.request(a,'/_matrix/client/v3/createRoom',{'preset':'private_chat','initial_state':[{'type':'m.room.encryption','state_key':'','content':{'algorithm':'m.megolm.v1.aes-sha2'}}]},tokens[0])

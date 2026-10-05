@@ -40,6 +40,10 @@ async function visibleOrError(page: Page, target: Locator, timeout = 65_000): Pr
 }
 async function enter(page: Page, username: string): Promise<void> {
   const account = accounts.find((a) => a.username === username)!;
+  const callingRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/voip/turnServer')) callingRequests.push(request.url());
+  });
   await page.goto('/');
   await page.getByLabel('Your home’s address').fill(state.url);
   await page.getByLabel('Username', { exact: true }).fill(username);
@@ -62,6 +66,7 @@ async function enter(page: Page, username: string): Promise<void> {
     await page.getByRole('button', { name: 'Open my memories', exact: true }).click();
   }
   await visibleOrError(page, page.getByRole('heading', { name: 'What’s on your mind?' }));
+  expect(callingRequests).toEqual([]);
 }
 test('recovery setup and a clean browser reopen the same account', async ({ browser }) => {
   const first = await browser.newContext();
