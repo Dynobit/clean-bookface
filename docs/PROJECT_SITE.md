@@ -1,6 +1,6 @@
 # The project website
 
-`site/` is the informational website prepared for **cleanbookface.org**. It is
+`site/` is the informational website published at **cleanbookface.org**. It is
 separate from any member circle or temporary pilot. It has no application
 server, accounts, archive upload, analytics scripts or external fonts. The page
 uses a compact social-network layout, the album logo, a fictional lakeside
@@ -10,9 +10,13 @@ GitHub links and separate joining and hosting instructions. Hosting providers ca
 
 The owner approved public source and website publication on 5 October 2026.
 The page uses v0.1 public-preview copy. Building it locally does not publish it,
-configure DNS or change repository visibility. Public repository and website
-readbacks remain pending; verify them using the procedure below. This approval
-does not open pilot invitations or promise an official hosting service.
+configure DNS or change repository visibility. Public source access is verified.
+Cloudflare Pages Free serves the seven reviewed assets from `46838a8`; all
+returned HTTP 200 and matched their approved hashes. Both `.org` custom domains
+are active over HTTPS, and all four `.com` entrypoints preserve paths and queries
+in 301 redirects. Delivered HTML contains no scripts after explicitly disabling
+zone RUM. See [Release status](RELEASE.md) for browser-check scope. Publication
+does not open pilot invitations or promise an official member-hosting service.
 
 ## Preview locally
 
@@ -34,43 +38,61 @@ people can inspect the actual interface. Update those images only with reviewed
 fictional fixtures; never capture an operator's account or an actual member's
 archive for this page.
 
-## Approved publication procedure
+## Publish with Cloudflare Pages
 
-1. The owner's public release approval is recorded in [Release status](RELEASE.md).
-   Review the exact publication contents. The website workflow does not change
-   repository visibility.
-2. Update the page's release-status wording to reflect what has actually been
-   approved. Repository availability and pilot availability are separate: opening
-   the source does not mean the pilot is accepting members.
-3. In the approved repository, configure GitHub Pages to use **GitHub Actions**.
-   Verify the domain's ownership with GitHub and set the custom domain to
-   `cleanbookface.org` before pointing DNS at the Pages destination. Configure
-   the `github-pages` environment to permit deployment from the reviewed `main`
-   branch; add a human reviewer when available and appropriate to stewardship.
-4. Use GitHub's current custom-domain instructions for the required DNS records
-   and HTTPS checks. Keep the `.com` redirect at the registrar as a separate
-   operation. Do not redirect visitors to an unqualified pilot host. The app's
-   future `pilot.cleanbookface.org` address is a different service.
-5. Manually run **Publish project website after approval** on `main`. It runs
-   only for the original repository after it is public. There are no push,
-   pull-request or scheduled deployment triggers.
-6. Verify HTTPS, the canonical address, the logo favicon, both screenshots,
-   keyboard navigation, mobile layout and links at the actual public address.
-   Confirm the `.com` redirect separately. A local preview is not this proof.
+The production publishing route is a manual Direct Upload to the existing
+`clean-bookface` Pages project (`clean-bookface.pages.dev`), on the Free plan.
+No paid upgrade or repository integration credential is needed. The attempted
+GitHub Pages publisher, run `37366344620`, failed before any steps ran because
+a hosted runner was unavailable during the GitHub Actions incident. It did not
+publish the website.
 
-The workflow gives the build read access to repository contents. Only the
-publication job receives Pages write access and the identity token needed for
-GitHub's deployment. It uses commit-pinned official
-[upload-pages-artifact](https://github.com/actions/upload-pages-artifact) and
-[deploy-pages](https://github.com/actions/deploy-pages) actions. See GitHub's
-[custom-domain documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site).
-No personal access token is needed in the source or workflow.
+1. Review the exact source revision and page wording, then run
+   `node scripts/build-site.mjs`. Prepare an upload directory containing only
+   these seven files, preserving their paths:
+   - `index.html`
+   - `styles.css`
+   - `favicon.svg`
+   - `assets/album-mark.svg`
+   - `assets/cover-weekend.png`
+   - `assets/feed-desktop.png`
+   - `assets/feed-mobile.png`
+2. Exclude `CNAME` and `.nojekyll`: the builder writes them for GitHub Pages
+   compatibility. Never upload the repository, archives, credentials, private
+   configuration or application data. Record the source revision and SHA-256
+   hashes of the seven approved files.
+3. Use Cloudflare Pages Direct Upload to deploy that directory to the existing
+   project's production environment. Review the target account and project
+   before publishing. Keep deployment credentials outside source and logs.
+4. Configure the canonical `cleanbookface.org` address through the project's
+   custom-domain settings, verifying ownership and the required DNS destination.
+   Check any `www` forwarding and the separate `.com` redirect. None should send
+   visitors to an unqualified pilot; member circles are separate services.
+5. Read back all seven deployed assets and compare their content hashes with
+   the approved files. Verify HTTPS on the provider and canonical addresses,
+   redirects, favicon, screenshots, links, keyboard navigation and mobile layout.
+   Explicitly disable zone RUM (Real User Monitoring), even if an initial
+   dashboard view shows disabled/default, and confirm the delivered page has no
+   injected analytics or tracking scripts.
+   A successful upload or local preview alone is not this proof.
+
+## Optional GitHub Pages alternative
+
+The retained **Publish project website after approval** workflow is an opt-in
+alternative, not the production publisher. The workflow is disabled and the
+unused GitHub Pages site has been removed. Keep it disabled while Cloudflare
+serves the project. Before enabling it, review its repository guard and exact
+source, configure GitHub Pages and domain ownership, and coordinate the DNS
+migration with HTTPS and redirect readbacks. Do not enable competing publishers
+for the same canonical domain. Its manual deployment uses GitHub's Pages
+permissions; Cloudflare credentials do not belong in that workflow.
 
 ## Community upkeep
 
 Small copy and design changes can be reviewed like other contributions. A
-maintainer must deliberately run the publishing workflow after reviewing the
-change. If stewardship moves to another repository or domain, update the
-workflow's repository guard, page links and generated `CNAME` together. Domain
-renewal and account recovery remain real responsibilities; see
-[Governance](../GOVERNANCE.md). A website does not automatically create a team.
+maintainer deliberately builds, reviews and uploads each website update, then
+checks the served files. If stewardship moves, transfer the Pages project and
+domain responsibilities through the providers' supported processes and update
+page links and publishing configuration. Domain renewal and account recovery
+remain real responsibilities; see [Governance](../GOVERNANCE.md). A website does
+not automatically create a team.

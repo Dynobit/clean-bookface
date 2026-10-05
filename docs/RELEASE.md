@@ -1,6 +1,44 @@
 # v0.1 release qualification
 
-The owner approved the v0.1 public preview of the source and project website on 5 October 2026. Publication readbacks for repository visibility, release/tag and the public website are still pending. This release offers no official hosting or public sign-up service and does not upgrade the operator-only pilot. Independent human security and accessibility review and the five-person usability study remain open; the requested exact Opus review was unavailable. The dated evidence below records its original scope, including earlier private checkpoints.
+The owner approved the v0.1 public preview of the source and project website on 5 October 2026. Public source availability and the project website are verified. This release offers no official hosting or public sign-up service and does not upgrade the operator-only pilot. Independent human security and accessibility review and the five-person usability study remain open; the requested exact Opus review was unavailable. The dated evidence below records its original scope, including earlier private checkpoints.
+
+## Publication readback, 5 October 2026
+
+The public repository at `46838a8` has a clean two-commit history. Anonymous
+access returned HTTP 200; the preserved private development repository returned 404. Private development history and operational records remain outside the
+public repository. Private vulnerability reporting, secret scanning, push
+protection and protection of `main` are enabled.
+
+Public CI run `37365701451` failed before any step ran: the job was not acquired
+by a hosted runner during the confirmed GitHub Actions outage. This is an
+infrastructure failure, not a passing public CI run. Private pre-release run
+`37361931833` passed at `3f5a6b4`; application and test inputs are byte-identical
+to the public candidate, whose initial changes covered twelve documentation and
+website-copy files. This publication update changes only the release, backlog
+and website-publishing documentation. That earlier evidence does not claim a successful run on
+the public repository. A successful public CI run remains pending.
+
+The project website is published through Cloudflare Pages Free from source
+`46838a8`. All seven assets at `https://cleanbookface.org` returned HTTP 200
+and matched the approved SHA-256 hashes. `https://www.cleanbookface.org` served
+the same index; both HTTP addresses redirected to HTTPS. Both custom domains
+are active. All four `.com` entrypoints returned 301 redirects preserving paths
+and queries. Obsolete parking wildcard DNS was removed; pilot and TXT records
+were preserved.
+
+Initial delivery exposed automatically injected Cloudflare analytics. Explicitly
+disabling zone RUM corrected it: the delivered HTML now contains no scripts.
+Fresh browser checks at 320 and 390 pixels with JavaScript disabled, and
+1321 pixels in normal Chrome with JavaScript enabled, passed all eight images,
+three navigation links and five repository links. There was no horizontal
+overflow, injected script or external resource request. The restrictive
+Content Security Policy remained present. Earlier 1280-pixel layout checks
+also passed; fresh headless desktop navigation hit a local transport timeout,
+so the final desktop check used normal Chrome. These checks do not replace
+independent human accessibility or usability evaluation. The GitHub Pages
+workflow is disabled and its unused Pages site removed; Cloudflare Direct
+Upload is the active publisher. This publishes project information, not member
+hosting or an upgrade of the operator-only pilot.
 
 ## Candidate scope
 
@@ -19,7 +57,7 @@ The source contains server-rendered desktop/mobile screens; invited accounts and
 | Dependency audit          | Runtime dependency audit returned zero reported vulnerabilities after reviewed transitive updates. An audit database cannot prove absence of vulnerabilities.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Source privacy            | Exact staged source and existing Git history passed gitleaks. The initial artifact guard covered 80 tracked files; the managed-host follow-up has 87. Its separate regression test passed 17 isolated Git-index fixtures covering personal paths, credentials and narrow container-path exceptions. Only synthetic fixtures and explicitly reviewed artwork/screenshots belong in the repository. CI checks tracked artifacts and obvious secret/private-path patterns; release review also scans the exact staged source and history. This is not a claim about arbitrary files on a developer's machine. |
 
-The initial application-complete container smoke passed all seven checks in 18.178 seconds on Linux ARM64 image `sha256:1120d380a68fc5108b17e0954a62ce07023a0365cf23afbaf0eb72254bd9e5f2`. Its database and media survived restart and encrypted recovery. Commit `4c022da` also passed the full [GitHub verification workflow](https://github.com/Dynobit/clean-bookface/actions/runs/37074293831). The subsequent managed-host additions have their own checks and retain the provider qualification boundary below. The extended real-HTTPS two-host application journey also passed after the integrated run.
+The initial application-complete container smoke passed all seven checks in 18.178 seconds on Linux ARM64 image `sha256:1120d380a68fc5108b17e0954a62ce07023a0365cf23afbaf0eb72254bd9e5f2`. Its database and media survived restart and encrypted recovery. Commit `4c022da` also passed the full GitHub verification workflow (private pre-release run `37074293831`). The subsequent managed-host additions have their own checks and retain the provider qualification boundary below. The extended real-HTTPS two-host application journey also passed after the integrated run.
 
 The managed-host image `sha256:89af4abc84ce6aac2f45d15c6b90cd9ec7cd8526c79f57a0dbc6696e14340bb4` subsequently passed the same seven HTTPS, persistence and encrypted-recovery checks in 20.2 seconds. The Railway definition passed type checking and actual resource-graph evaluation against SDK 3.12.0. The Render Blueprint passed local structural assertions; its fields were reviewed against the official reference, without claiming an external provider deployment or a complete provider-schema validator run.
 
@@ -94,7 +132,7 @@ units were removed and the synthetic containers remain stopped. These checks
 did not reboot the shared host or open a public route.
 
 The private checkpoint `6e62e8f` passed the complete
-[GitHub verification workflow](https://github.com/Dynobit/clean-bookface/actions/runs/37293636376).
+GitHub verification workflow (private pre-release run `37293636376`).
 That result covers the committed application and deployment checks at that
 checkpoint, not subsequent operator-tool changes.
 
@@ -168,7 +206,7 @@ All **158 native tests passed with zero skips** after this correction. An actual
 read-only call to the selected Pi confirmed the new controller refuses its
 missing memory support before starting services. The resource-guard checkpoint
 `be8fff1` passed the complete
-[GitHub verification workflow](https://github.com/Dynobit/clean-bookface/actions/runs/37303451558).
+GitHub verification workflow (private pre-release run `37303451558`).
 
 The corrected host then completed a separate constrained workload: **25 accounts,
 25,000 records and 10.06 GiB of original JPEGs**, with one CPU and 2 GiB enforced
@@ -427,7 +465,7 @@ general Fediverse compatibility or a permanent hosting offer.
 - Keep the account limit at 25 unless a larger workload and moderation capacity are separately qualified. No result here establishes 1,000-account capacity, measured ISP reliability or permanent managed-provider hosting.
 - Independent security review and accessibility review; five-person usability evaluation including people who do not operate servers.
 - Fresh-account qualification of managed-provider deployment and recovery. An owner-facing backup walkthrough, same-volume maintenance mode and deployment templates are now included; their existence does not prove a provider deployment.
-- Owner approval of the public source and website is recorded above. Complete publication and verify public repository visibility, the release/tag, issue/security intake and the actual website with HTTPS and working links. Maintain the documented contribution and stewardship arrangements; public release does not establish an independent review or a staffed maintenance team.
+- Owner approval of the public source and website is recorded above. Public source visibility and private security reporting are verified. The static website, HTTPS and redirects are verified under the conditions above. A successful public CI run remains pending after the runner outage. Public issue intake is enabled. Maintain the documented contribution and stewardship arrangements; public release does not establish an independent review or a staffed maintenance team.
 
 Do not import real personal histories into a live circle simply because a local test suite is green. Complete the relevant installation and restore checks, and make the administrator trust model clear to every member.
 
