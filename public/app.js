@@ -221,6 +221,30 @@ for (const button of document.querySelectorAll('[data-copy-target]')) {
     }
   });
 }
+const recoveryCodes = document.getElementById('recovery-codes');
+if (recoveryCodes) {
+  const codes = recoveryCodes;
+  const status = document.querySelector('[data-recovery-copy-status]');
+  const recoveryCopy = document.createElement('button');
+  recoveryCopy.type = 'button';
+  recoveryCopy.className = 'secondary';
+  recoveryCopy.dataset.copyRecovery = '';
+  recoveryCopy.textContent = 'Copy all recovery codes';
+  status.before(recoveryCopy);
+  recoveryCopy.addEventListener('click', async () => {
+    status.textContent = '';
+    try {
+      await navigator.clipboard.writeText(
+        Array.from(codes.querySelectorAll('code'), (code) => code.textContent).join('\n'),
+      );
+      status.textContent =
+        'Recovery codes copied. Paste them somewhere private before leaving this page.';
+    } catch {
+      status.textContent =
+        'Could not copy automatically. Select the codes above and copy them, or write them down.';
+    }
+  });
+}
 const importState = document.querySelector('[data-running-import]');
 if (importState) {
   let checks = 0;

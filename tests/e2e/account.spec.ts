@@ -21,6 +21,16 @@ test('invitation, mutual friendship, recovery and preferences work without JavaS
     const joiningLink = await hostPage.locator('#invite-link').inputValue();
 
     await guestPage.goto(joiningLink);
+    await expect(guestPage.getByLabel('Username', { exact: true })).toHaveAttribute(
+      'autocapitalize',
+      'none',
+    );
+    await expect(guestPage.getByLabel('Username', { exact: true })).toHaveAccessibleDescription(
+      'Use 3–32 lowercase letters, numbers or underscores. Start with a letter or number.',
+    );
+    await expect(guestPage.getByLabel('Password', { exact: true })).toHaveAccessibleDescription(
+      /at least 12 characters/,
+    );
     await guestPage.getByLabel('Username', { exact: true }).fill(username);
     await guestPage.getByLabel('Your name', { exact: true }).fill('Taylor Example');
     await guestPage.getByLabel('Password', { exact: true }).fill(password);
@@ -29,6 +39,7 @@ test('invitation, mutual friendship, recovery and preferences work without JavaS
     await expect(
       guestPage.getByRole('heading', { name: 'Keep a way back in.', exact: true }),
     ).toBeVisible();
+    await expect(guestPage.locator('[data-copy-recovery]')).toBeHidden();
     await expect(guestPage.locator('.codes code')).toHaveCount(8);
     const recoveryCode = await guestPage.locator('.codes code').first().textContent();
     expect(recoveryCode).toBeTruthy();
@@ -96,5 +107,72 @@ test('invitation, mutual friendship, recovery and preferences work without JavaS
     ).toBeVisible();
   } finally {
     await Promise.all([host.close(), guest.close(), stranger.close()]);
+  }
+});
+
+test('recovery codes copy only on request and failures leave a usable manual path', async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  await page.goto('/login');
+  await page.getByLabel('Username', { exact: true }).fill('alice');
+  await page.getByLabel('Password', { exact: true }).fill('fictional-demo-password-only');
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
+  await page.goto('/friends');
+  await page.getByRole('button', { name: 'Create joining invitation', exact: true }).click();
+  const invitation = await page.locator('#invite-link').inputValue();
+  const guest = await browser.newContext({ baseURL });
+  try {
+    const newcomer = await guest.newPage();
+    await newcomer.goto(invitation);
+    await newcomer.getByLabel('Username', { exact: true }).fill(`copy_${Date.now().toString(36)}`);
+    await newcomer.getByLabel('Your name', { exact: true }).fill('Morgan Example');
+    await newcomer
+      .getByLabel('Password', { exact: true })
+      .fill('fictional recovery copy passphrase');
+    await newcomer.locator('input[name="acceptRules"]').check();
+    await newcomer.getByRole('button', { name: 'Join this circle', exact: true }).click();
+    const codes = await newcomer.locator('.codes code').allTextContents();
+    expect(codes).toHaveLength(8);
+    const status = newcomer.locator('[data-recovery-copy-status]');
+    await expect(status).toBeEmpty();
+    await expect(status).toHaveAttribute('aria-live', 'polite');
+    await newcomer.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            document.body.dataset.copiedCodes = text;
+          },
+        },
+      });
+    });
+    const copy = newcomer.getByRole('button', { name: 'Copy all recovery codes', exact: true });
+    await copy.click();
+    await expect(status).toContainText('Recovery codes copied.');
+    expect(await newcomer.locator('body').getAttribute('data-copied-codes')).toBe(codes.join('\n'));
+    for (const unavailable of [false, true]) {
+      await newcomer.evaluate((missing) => {
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: missing
+            ? undefined
+            : {
+                writeText: async () => {
+                  throw new Error('Permission denied');
+                },
+              },
+        });
+      }, unavailable);
+      await copy.click();
+      await expect(status).toContainText('Could not copy automatically.');
+      await expect(status).not.toContainText('Recovery codes copied.');
+      expect(await newcomer.locator('.codes code').allTextContents()).toEqual(codes);
+    }
+    await newcomer.getByRole('link', { name: 'I’ve saved my codes', exact: true }).click();
+    await expect(newcomer).toHaveURL('/');
+  } finally {
+    await guest.close();
   }
 });

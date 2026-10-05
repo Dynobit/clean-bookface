@@ -80,7 +80,7 @@ restic check --read-data`)}<p>The last snapshot remains if backups stop. Older c
 }
 
 export function recoveryScreen(codes: string[]): string {
-  return `<div class="card card-pad"><h1>Keep a way back in.</h1><p>Save these recovery codes somewhere private. Each code works once. You’ll need one if you forget your password.</p><div class="codes">${codes.map((c) => `<code>${e(c)}</code>`).join('')}</div><p class="info">This is the only time we show these codes. Your host cannot retrieve them for you.</p><a class="button" href="/">I’ve saved my codes</a></div>`;
+  return `<div class="card card-pad"><h1>Keep a way back in.</h1><p>Save these recovery codes somewhere private. Each code works once. You’ll need one if you forget your password.</p><div class="codes" id="recovery-codes">${codes.map((c) => `<code>${e(c)}</code>`).join('')}</div><p role="status" aria-live="polite" data-recovery-copy-status></p><p>You can write these down or select and copy them into a private place, such as your password manager.</p><p class="info">This is the only time we show these codes. Your host cannot retrieve them for you.</p><a class="button" href="/">I’ve saved my codes</a></div>`;
 }
 export function audiencePicker(
   core: Core,

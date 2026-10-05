@@ -447,7 +447,7 @@ export function createApplication(
       c,
       'Set up your circle',
       welcome(
-        `<div class="card card-pad"><h2>Make yourself at home</h2><p>This creates the first account for the host. Run the setup command on your server to obtain its private setup code.</p><form method="post" action="/actions/setup">${field('Setup code', 'setupToken', 'password', 'required autocomplete="off"')}${field('Username', 'username', 'text', 'required pattern="[a-z0-9][a-z0-9_]{2,31}" autocomplete="username"')}${field('Your name', 'displayName', 'text', 'required maxlength="80" autocomplete="name"')}${field('Password', 'password', 'password', 'required minlength="12" autocomplete="new-password"')}<label class="check"><input name="acceptRules" type="checkbox" required>I’m a person, and I agree to the <a href="/rules">house rules</a>.</label><button>Create my circle</button></form></div>`,
+        `<div class="card card-pad"><h2>Make yourself at home</h2><p>This creates the first account for the host. Run the setup command on your server to obtain its private setup code.</p><form method="post" action="/actions/setup">${field('Setup code', 'setupToken', 'password', 'required autocomplete="off"')}${field('Username', 'username', 'text', 'required pattern="[a-z0-9][a-z0-9_]{2,31}" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-help"')}<p id="username-help">Use 3–32 lowercase letters, numbers or underscores. Start with a letter or number.</p>${field('Your name', 'displayName', 'text', 'required maxlength="80" autocomplete="name"')}${field('Password', 'password', 'password', 'required minlength="12" maxlength="1024" autocomplete="new-password" aria-describedby="password-help"')}<p id="password-help">Choose a password with at least 12 characters (up to 1,024). A few words can be easier to remember.</p><label class="check"><input name="acceptRules" type="checkbox" required>I’m a person, and I agree to the <a href="/rules">house rules</a>.</label><button>Create my circle</button></form></div>`,
       ),
     );
   });
@@ -493,7 +493,7 @@ export function createApplication(
       c,
       'Join your friend',
       welcome(
-        `<div class="card card-pad"><h2>${e(invite.inviter)} invited you.</h2><p>Create an account here. Joining does not automatically grant anyone access to your memories.</p><form method="post" action="/actions/register">${hidden('inviteToken', c.req.param('token'))}${field('Username', 'username', 'text', 'required pattern="[a-z0-9][a-z0-9_]{2,31}" autocomplete="username"')}${field('Your name', 'displayName', 'text', 'required maxlength="80"')}${field('Password', 'password', 'password', 'required minlength="12" autocomplete="new-password"')}<label class="check"><input type="checkbox" name="acceptRules" required>I’m a person and agree to the <a href="/rules">house rules</a>.</label><button>Join this circle</button></form></div>`,
+        `<div class="card card-pad"><h2>${e(invite.inviter)} invited you.</h2><p>Create an account here. Joining does not automatically grant anyone access to your memories.</p><form method="post" action="/actions/register">${hidden('inviteToken', c.req.param('token'))}${field('Username', 'username', 'text', 'required pattern="[a-z0-9][a-z0-9_]{2,31}" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-help"')}<p id="username-help">Use 3–32 lowercase letters, numbers or underscores. Start with a letter or number.</p>${field('Your name', 'displayName', 'text', 'required maxlength="80"')}${field('Password', 'password', 'password', 'required minlength="12" maxlength="1024" autocomplete="new-password" aria-describedby="password-help"')}<p id="password-help">Choose a password with at least 12 characters (up to 1,024). A few words can be easier to remember.</p><label class="check"><input type="checkbox" name="acceptRules" required>I’m a person and agree to the <a href="/rules">house rules</a>.</label><button>Join this circle</button></form></div>`,
       ),
     );
   });
@@ -1041,7 +1041,7 @@ export function createApplication(
       : show(
           c,
           'An invitation for a friend',
-          `<div class="card card-pad"><h1>Send this to someone you know.</h1><p>This invitation can be used once, and expires ${e(date(invite.expiresAt))}. We won’t show the secret link again.</p><label for="invite-link">Private invitation</label><input id="invite-link" readonly value="${e(link)}"><button type="button" class="secondary" data-copy-target="invite-link">Copy invitation</button><hr><a href="/friends">Back to friends</a></div>`,
+          `<div class="card card-pad"><h1>Send this to someone you know.</h1><p>This invitation can be used once, and expires ${e(date(invite.expiresAt))}. We won’t show the secret link again.</p><p>Send this link privately to the person you want to invite. They can open it in their browser and follow the steps.</p><label for="invite-link">Private invitation</label><input id="invite-link" readonly value="${e(link)}"><button type="button" class="secondary" data-copy-target="invite-link">Copy invitation</button><hr><a href="/friends">Back to friends</a></div>`,
           'friends',
         );
   });
