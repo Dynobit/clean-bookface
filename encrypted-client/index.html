@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      name="description"
+      content="Your memories, your friends, your rules. The encrypted Clean Bookface browser client."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>Clean Bookface · Your friends, your rules</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/"><img src="/album-mark.svg" alt="" />clean bookface</a
+      ><span class="top-note">Your friends. Your rules.</span>
+    </header>
+    <main id="app" aria-busy="true"><p class="loading">Opening your book…</p></main>
+    <aside id="verification" aria-live="polite"></aside>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <footer>
+      Made for people, by people. No ads. No engagement scores.
+      <a href="https://github.com/Dynobit/clean-bookface" target="_blank" rel="noreferrer"
+        >Source &amp; community</a
+      >
+      · <a href="https://cleanbookface.org" target="_blank" rel="noreferrer">About the project</a>
+      <p>
+        Independent open source software. Not affiliated with Meta or Facebook. Encrypted client:
+        development preview.
+      </p>
+    </footer>
+    <noscript
+      >This version encrypts your memories in your browser and needs JavaScript. Your storage host
+      should not serve this browser application.</noscript
+    >
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

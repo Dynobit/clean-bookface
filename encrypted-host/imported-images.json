@@ -1,0 +1,4 @@
+{
+  "synapse": "ghcr.io/element-hq/synapse:v1.162.0@sha256:a510b4811a9b759795af4dcb022b8a5de8f0df6999d17ab819951a1983d487bb",
+  "postgres": "postgres:17.11-bookworm@sha256:82e49896bda1a933cb79fea2ae92bcd82b9259138626354f789c3b4ea0120c4a"
+}

@@ -2,6 +2,8 @@
 
 Implementation and acceptance ledger, updated 2026-10-05. The v0.1 public-preview application implements the archive, same-host circle and constrained cross-server sharing. The original acceptance criteria remain below; implemented code and automated evidence are distinguished from unfinished release qualification. People control their own feed and interface; the product does not optimize their behavior for engagement.
 
+The separately delivered [encrypted browser successor](ENCRYPTION.md) is development work. The v0.1 milestones below do not establish feature parity or release acceptance for that new architecture. Its [qualification record](../encrypted-client/QUALIFICATION.md) distinguishes tested recovery and sharing from remaining migration, moderation, deletion and production work.
+
 Implemented stack: Node 24, TypeScript, Hono with server-rendered pages, node:sqlite, private filesystem media and Fedify 2.4.0 HTTP signatures. One application owns persistent import jobs and a transactional delivery ledger. Dependencies are pinned in package-lock.json; no separate queue, search or frontend service is required.
 
 The original `clean-bookface` directory remains a preserved prototype. Reuse its synthetic fixtures, import classification ideas, SQLite transaction patterns, and visual references selectively. Its Electron wrapper, browser extension, ownerless entity model, predictable vault-key fallback, and structural checks are not a hosted social application. Passing its existing tests does not satisfy this backlog.

@@ -20,8 +20,8 @@
     "restore": "tsx src/cli.ts restore",
     "demo": "tsx scripts/demo.ts",
     "check:repository": "node scripts/check-repository.mjs",
-    "format": "prettier --write \"src/**/*.ts\" \"scripts/*.{ts,mjs}\" \"tests/**/*.ts\" \"public/*.{css,js}\" \"*.{json,yaml,ts,mjs}\" \".github/**/*.yml\" \".railway/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"scripts/*.{ts,mjs}\" \"tests/**/*.ts\" \"public/*.{css,js}\" \"*.{json,yaml,ts,mjs}\" \".github/**/*.yml\" \".railway/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"scripts/*.{ts,mjs}\" \"tests/**/*.ts\" \"public/*.{css,js}\" \"*.{json,yaml,ts,mjs}\" \".github/**/*.yml\" \".railway/*.ts\" \"encrypted-client/src/**/*.{ts,css}\" \"encrypted-client/tests/**/*.ts\" \"encrypted-client/*.{ts,html,json}\" \"encrypted-host/*.json\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"scripts/*.{ts,mjs}\" \"tests/**/*.ts\" \"public/*.{css,js}\" \"*.{json,yaml,ts,mjs}\" \".github/**/*.yml\" \".railway/*.ts\" \"encrypted-client/src/**/*.{ts,css}\" \"encrypted-client/tests/**/*.ts\" \"encrypted-client/*.{ts,html,json}\" \"encrypted-host/*.json\"",
     "test:container": "node scripts/container-smoke.mjs",
     "screenshots": "node scripts/capture-screenshots.mjs",
     "test:provider": "node scripts/provider-smoke.mjs"

@@ -89,6 +89,7 @@ Start with [Contributing](CONTRIBUTING.md). [Community stewardship](GOVERNANCE.m
 | Back up, update or recover a circle     | [Operations](docs/OPERATIONS.md)                                                         |
 | Connect circles on different servers    | [Cross-host connections](docs/FEDERATION.md)                                             |
 | Run the local demo or change the code   | [Development guide](docs/DEVELOPMENT.md)                                                 |
+| Follow the encrypted browser work      | [Development preview and privacy boundaries](encrypted-client/README.md)                |
 | Inspect the remaining release work      | [Release evidence](docs/RELEASE.md), [backlog](docs/BACKLOG.md), [security](SECURITY.md) |
 
 </details>
