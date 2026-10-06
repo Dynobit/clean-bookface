@@ -1,5 +1,7 @@
 # Take your memories with you
 
+> This page describes the older **v0.1 application**. For the encrypted version, use the [member guide](ENCRYPTED_GETTING_STARTED.md), [hosting guide](../encrypted-host/SELF_HOST.md) and [encryption contract](ENCRYPTION.md). The two versions have different privacy and hosting requirements.
+
 The **Export my account** button downloads a ZIP you can keep or import on another
 Clean Bookface host. Treat this download as private: it contains your archive,
 including imported messages, and is not encrypted. Store it somewhere you trust.

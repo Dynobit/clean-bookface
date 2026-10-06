@@ -11,8 +11,8 @@ const files = [
   ['public/favicon.svg', 'favicon.svg'],
   ['public/assets/album-mark.svg', 'assets/album-mark.svg'],
   ['site/assets/cover-weekend.png', 'assets/cover-weekend.png'],
-  ['docs/images/feed-desktop.png', 'assets/feed-desktop.png'],
-  ['docs/images/feed-mobile.png', 'assets/feed-mobile.png'],
+  ['docs/images/encrypted-feed-desktop.png', 'assets/encrypted-feed-desktop.png'],
+  ['docs/images/encrypted-feed-mobile.png', 'assets/encrypted-feed-mobile.png'],
 ];
 for (const [source] of files) {
   const info = await lstat(resolve(root, source));

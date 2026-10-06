@@ -8,4 +8,6 @@ The supplied home accepts single-use invitations that expire after one hour. Gue
 
 Two hosts can improve recovery: one serves members, and the second keeps encrypted backups until it is needed. This implementation provides encrypted local or explicitly configured SFTP backups and a local standby drill, not automatic failover or zero downtime. Routine backups resume a previously running primary before uploading; keeping it stopped is an explicit restore-drill option. The SFTP interface requires qualification with the chosen second host. Both drill containers run on the same machine, so the drill does not prove protection from losing that machine. Keep the backup password somewhere separate from both hosts. Members must retain their own browser recovery material; a server backup cannot recreate missing client encryption keys.
 
+Check [supported host architecture](ARCHITECTURE.md), then start with [the self-host installation guide](SELF_HOST.md) for automatic HTTPS, private invitation links, scheduled backup health and report review.
+
 See [the operator guide](OPERATIONS.md) for installation, invitations and recovery, and [measured qualification](QUALIFICATION.md) for what has actually run. No public encrypted hosting service or hosted pilot is created by this component.

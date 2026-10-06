@@ -70,14 +70,16 @@ def main():
         common=['--runtime',str(options.runtime),'--sftp-host',ip,'--sftp-port','2222','--sftp-user','cbfbackup','--sftp-path','/backup/repository','--ssh-directory',str(ssh),'--password-file',str(root/'restic-password')]
         def recover(action,*extra,expect_success=True):
             before=time.monotonic()
-            with (root/(action+'-'+secrets.token_hex(3)+'.log')).open('w') as log:
+            logpath = root/(action+'-'+secrets.token_hex(3)+'.log')
+            with logpath.open('w') as log:
                 result=subprocess.run([sys.executable,str(host.ROOT/'recovery.py'),action,*common,*extra],stdout=log,stderr=subprocess.STDOUT,timeout=180)
+            result.stderr = logpath.read_text()
             if expect_success and result.returncode:raise RuntimeError(action+' failed; inspect private runtime log')
             return result,time.monotonic()-before
         correct=(ssh/'known_hosts').read_text()
         host.write(ssh/'known_hosts',f'[{ip}]:2222 '+(root/'wrong.pub').read_text())
         failed,_=recover('init-repository',expect_success=False)
-        check(failed.returncode!=0,'strict incorrect SSH host key rejected')
+        check(failed.returncode!=0 and 'Host key verification failed' in failed.stderr,'strict incorrect SSH host key rejected')
         host.write(ssh/'known_hosts',correct)
         recover('init-repository');check(True,'actual SFTP restic repository initialized')
         _,elapsed=recover('backup');proof['routineBackupSeconds']=round(elapsed,2)

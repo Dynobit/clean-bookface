@@ -112,6 +112,8 @@ function fixture(purpose: 'archive' | 'pair' = 'archive') {
     on: emitter.on.bind(emitter),
     off: emitter.off.bind(emitter),
     getMediaConfig: async () => ({ 'm.upload.size': 256 * 1024 * 1024 }),
+    isUserIgnored: () => false,
+    getAccountData: () => undefined,
     getUserId: () => me,
     getDeviceId: () => 'DEVICE',
     getCrypto: () => c,
@@ -481,6 +483,45 @@ test('stripped invite state is checked in full after join and invalid full membe
     }
     assert.equal(f.uploaded.length, 0);
     assert.equal(f.sent.length, 0);
+  }
+});
+
+test('a deliberate valid reinvitation restores a revoked friendship in the same session', async () => {
+  const f = fixture('pair');
+  await f.store.revokeFriend(friend);
+  f.client.isUserIgnored = (id: string) => id === friend;
+  f.members[0].membership = 'invite';
+  await assert.rejects(f.store.acceptInvite(f.room.roomId), /blocked/);
+  assert.equal(f.members[0].membership, 'invite');
+  f.client.isUserIgnored = () => false;
+  await f.store.acceptInvite(f.room.roomId);
+  assert.deepEqual(f.store.friendRooms(), [{ roomId: f.room.roomId, userId: friend }]);
+  await f.store.share(record, [friend]);
+  assert.equal(f.sent.length, 1);
+});
+
+test('reinvitation keeps revocation after hostile joined state or a new block', async () => {
+  for (const attack of ['extra-member', 'block-during-join']) {
+    const f = fixture('pair');
+    await f.store.revokeFriend(friend);
+    f.members[0].membership = 'invite';
+    f.client.joinRoom = async () => {
+      f.members[0].membership = 'join';
+      if (attack === 'extra-member')
+        f.members.push({ userId: '@intruder:example.org', membership: 'join' });
+      else f.client.isUserIgnored = (id: string) => id === friend;
+    };
+    await assert.rejects(f.store.acceptInvite(f.room.roomId), /membership|blocked/);
+    assert.equal(f.members[0].membership, 'leave');
+    f.members.splice(2);
+    f.client.isUserIgnored = () => false;
+    // Even if the host now reports an ordinary joined room, a failed
+    // acceptance must not have lifted this session's prior revocation.
+    f.members[0].membership = 'join';
+    assert.deepEqual(f.store.friendRooms(), []);
+    await assert.rejects(f.store.share(record, [friend]));
+    assert.equal(f.sent.length, 0);
+    assert.equal(f.uploaded.length, 0);
   }
 });
 
@@ -1160,5 +1201,152 @@ test('scan time exhaustion returns validated manifest pages and resumes without 
     await assert.rejects(f.store.privateArchive(), /Integrity failure/);
   } finally {
     Date.now = original;
+  }
+});
+
+test('encrypted social writes bind room and post, retry and remove through authenticated history', async () => {
+  const f = fixture('pair');
+  await f.store.share(record, [friend]);
+  f.events.push(f.event(f.sent[0][2]));
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response(f.uploaded[0]);
+  try {
+    const [post] = await f.store.posts();
+    const op = 'comment-operation-1';
+    await f.store.addComment(post, 'COMMENT MARKER', op);
+    const first = f.sent.at(-1);
+    assert.equal(first[2].room_id, post.roomId);
+    assert.equal(first[2].payload.postId, post.id);
+    assert.equal(first[2].payload.postSender, me);
+    f.events.push(f.event(first[2]));
+    await f.store.addComment(post, 'COMMENT MARKER', op);
+    assert.equal(f.sent.at(-1)[3], first[3]);
+    assert.equal((await f.store.posts())[0].comments.length, 1);
+    await assert.rejects(f.store.addComment(post, 'changed', op), /Conflicting/);
+    await f.store.removeComment(post, op, 'remove-comment-operation');
+    f.events.push(f.event(f.sent.at(-1)[2]));
+    assert.deepEqual((await f.store.posts())[0].comments, []);
+    await f.store.removePost(post, 'remove-post-operation');
+    f.events.push(f.event(f.sent.at(-1)[2]));
+    assert.deepEqual(await f.store.posts(), []);
+    await assert.rejects(f.store.addComment(post, 'later', 'another-operation'), /removed/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('social plaintext and forged signatures lock the conversation', async () => {
+  for (const mode of ['plaintext', 'forged']) {
+    const f = fixture('pair');
+    await f.store.share(record, [friend]);
+    f.events.push(f.event(f.sent[0][2]));
+    const post = {
+      eventId: '$post',
+      id: f.sent[0][2].payload.id,
+      roomId: f.room.roomId,
+      sender: me,
+      timestamp: 1,
+      record,
+      comments: [],
+      reactions: [],
+    };
+    await f.store.addComment(post, 'secret', 'comment-operation');
+    const signed = structuredClone(f.sent.at(-1)[2]);
+    if (mode === 'forged') signed.payload.postSender = friend;
+    f.events.push(f.event(signed, { encrypted: mode !== 'plaintext' }));
+    assert.deepEqual(await f.store.posts(), []);
+    assert.equal(f.store.lockedRooms().length, 1);
+  }
+});
+
+test('persistent ignored users cannot invite, accept, read or send into pairwise rooms', async () => {
+  const f = fixture('pair');
+  await f.store.share(record, [friend]);
+  const post = {
+    eventId: '$post',
+    id: f.sent[0][2].payload.id,
+    roomId: f.room.roomId,
+    sender: me,
+    timestamp: 1,
+    record,
+    comments: [],
+    reactions: [],
+  };
+  f.client.isUserIgnored = (id: string) => id === friend;
+  assert.deepEqual(f.store.friendRooms(), []);
+  assert.deepEqual(await f.store.posts(), []);
+  await assert.rejects(f.store.inviteFriend(friend), /blocked/);
+  await assert.rejects(f.store.acceptInvite(f.room.roomId), /blocked/);
+  await assert.rejects(f.store.addComment(post, 'blocked', 'blocked-operation'), /friendship/);
+  await assert.rejects(f.store.prepareVerification(f.room.roomId, friend), /blocked/);
+});
+
+test('large-archive batch retry authenticates prior parts without downloading their media', async () => {
+  const f = fixture();
+  const first = await f.store.appendArchiveBatch([record]);
+  assert.equal(first.stored, true);
+  f.events.push(f.event(f.sent[0][2]));
+  const resumed = new ContentStore(f.client, async () => {});
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error('Old media must not be downloaded to resume an import');
+  };
+  try {
+    const retry = await resumed.appendArchiveBatch([record]);
+    assert.deepEqual(retry, { ...first, stored: false });
+    assert.equal(f.uploaded.length, 1);
+    assert.equal(f.sent.length, 1);
+    const second = await resumed.appendArchiveBatch([
+      { ...record, id: 'second', text: 'Another private memory' },
+    ]);
+    assert.equal(second.stored, true);
+    assert.notEqual(second.id, first.id);
+    assert.equal(f.uploaded.length, 2);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('batch append refuses tampered existing history before uploading anything new', async () => {
+  const f = fixture();
+  await f.store.appendArchiveBatch([record]);
+  const forged = structuredClone(f.sent[0][2]);
+  forged.payload.id = '0'.repeat(64);
+  f.events.push(f.event(forged));
+  await assert.rejects(f.store.appendArchiveBatch([{ ...record, id: 'other' }]));
+  assert.equal(f.uploaded.length, 1);
+});
+
+test('archive search decrypts locally and returns bounded excerpts without media or provenance', async () => {
+  const f = fixture();
+  await f.store.appendArchiveBatch([
+    record,
+    { ...record, id: 'another', text: 'PLANTED PRIVATE TEXT again' },
+  ]);
+  f.events.push(f.event(f.sent[0][2]));
+  const original = globalThis.fetch;
+  const fetched: string[] = [];
+  globalThis.fetch = async (input) => {
+    fetched.push(String(input));
+    return new Response(f.uploaded[0]);
+  };
+  try {
+    const result = await f.store.searchArchive('planted', 1);
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.limited, true);
+    assert.equal(result.matches[0].recordId, record.id);
+    assert.ok(result.matches[0].excerpt.includes(record.text));
+    assert.ok(!JSON.stringify(result).includes('PRIVATE PROVENANCE'));
+    assert.ok(fetched.every((url) => !url.includes('planted')));
+    const all = await f.store.searchArchive('planted', 50);
+    assert.equal(all.matches.length, 2);
+    assert.equal(all.limited, false);
+    assert.equal(all.partsChecked, 1);
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(f.store.searchArchive('planted', 50, undefined, controller.signal));
+    await assert.rejects(f.store.searchArchive('x'));
+  } finally {
+    globalThis.fetch = original;
   }
 });

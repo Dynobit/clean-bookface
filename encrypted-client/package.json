@@ -1,6 +1,6 @@
 {
   "name": "clean-bookface-encrypted-client",
-  "version": "0.2.0-dev",
+  "version": "0.2.0-preview.1",
   "private": true,
   "type": "module",
   "license": "MIT",

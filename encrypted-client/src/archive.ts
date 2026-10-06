@@ -1,3 +1,4 @@
+import { importLegacy } from './legacy-import.js';
 import { BlobReader, BlobWriter, ZipReader, ZipWriter } from '@zip.js/zip.js';
 export type ArchiveKind = 'post' | 'message' | 'photo' | 'album' | 'friend';
 export interface MemoryRecord {
@@ -183,7 +184,7 @@ export function parseFacebook(value: unknown, filename: string): NormalizedRecor
   return result;
 }
 
-function safePath(path: string): string {
+export function safePath(path: string): string {
   if (
     !path ||
     path.length > 2048 ||
@@ -211,17 +212,17 @@ const mimeTypes: Record<string, string> = {
   ogg: 'audio/ogg',
   wav: 'audio/wav',
 };
-function mediaMime(path: string): string {
+export function mediaMime(path: string): string {
   return mimeTypes[path.split('.').pop()!.toLowerCase()] ?? '';
 }
-async function hash(value: string | Blob): Promise<string> {
+export async function hash(value: string | Blob): Promise<string> {
   const data =
     typeof value === 'string' ? new TextEncoder().encode(value) : await value.arrayBuffer();
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data)), (b) =>
     b.toString(16).padStart(2, '0'),
   ).join('');
 }
-async function rejectExecutable(blob: Blob): Promise<void> {
+export async function rejectExecutable(blob: Blob): Promise<void> {
   const bytes = new Uint8Array(await blob.slice(0, 512).arrayBuffer());
   const text = new TextDecoder().decode(bytes).trimStart().toLowerCase();
   if (
@@ -258,9 +259,8 @@ export async function importArchives(
   let entries = 0,
     expanded = 0,
     declared = 0;
-  for (const file of files) {
+  async function extract(file: Blob, target: Map<string, Blob>): Promise<void> {
     check();
-    if (!/\.zip$/iu.test(file.name)) throw new Error('Only JSON ZIP archives are supported');
     const reader = new ZipReader(new BlobReader(file), { useWebWorkers: false });
     try {
       for await (const entry of reader.getEntriesGenerator()) {
@@ -306,15 +306,34 @@ export async function importArchives(
           type: json ? 'application/json' : mediaMime(path) || 'application/octet-stream',
         });
         if (mediaMime(path)) await rejectExecutable(blob);
-        const previous = blobs.get(path);
+        const previous = target.get(path);
         if (previous && (await hash(previous)) !== (await hash(blob)))
           throw new Error('Conflicting duplicate archive path');
-        if (!previous) blobs.set(path, blob);
+        if (!previous) target.set(path, blob);
       }
     } finally {
       await reader.close();
     }
   }
+  for (const file of files) {
+    if (!/\.zip$/iu.test(file.name)) throw new Error('Only JSON ZIP archives are supported');
+    await extract(file, blobs);
+  }
+  const legacy = await importLegacy(blobs, {
+    limits,
+    check,
+    hash,
+    safePath,
+    timestamp,
+    validateStructure,
+    rejectExecutable,
+    extract: async (blob) => {
+      const nested = new Map<string, Blob>();
+      await extract(blob, nested);
+      return nested;
+    },
+  });
+  if (legacy) return legacy;
   const records: MemoryRecord[] = [],
     warnings: string[] = [];
   const missing = new Set<string>();
@@ -388,6 +407,7 @@ export async function importArchives(
         if (records.length > limits.maxRecords) throw new Error('Archive record limit exceeded');
       }
     } else {
+      if (Object.hasOwn(root, 'format')) throw new Error('Unsupported declared archive format');
       const parsed = parseFacebook(value, path);
       if (!parsed.length) warnings.push(`Unsupported or empty JSON: ${path}`);
       for (const item of parsed) {

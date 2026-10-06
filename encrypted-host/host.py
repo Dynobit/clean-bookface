@@ -92,6 +92,28 @@ def federation_peer(value):
         raise argparse.ArgumentTypeError('Invalid peer port')
     return hostname + (':' + str(int(port)) if port else '')
 
+def synapse_user():
+    # The official entrypoint drops UID 0. Give root-run installs an explicit
+    # unprivileged identity and make only their new /data tree readable by it.
+    return '991:991' if os.getuid() == 0 else f'{os.getuid()}:{os.getgid()}'
+
+
+def prepare_synapse_ownership(runtime, spec):
+    if os.getuid() != 0:
+        return
+    identity = spec['services']['synapse']['user']
+    if not re.fullmatch(r'[0-9]+:[0-9]+', identity):
+        raise RuntimeError('Synapse requires an explicit numeric service identity')
+    uid, gid = map(int, identity.split(':'))
+    if uid == 0:
+        raise RuntimeError('Refusing root Synapse service identity')
+    directory = runtime / 'synapse'
+    if directory.is_symlink() or not directory.is_dir():
+        raise RuntimeError('Synapse data must be a real directory in the managed runtime')
+    for path in [directory, *directory.rglob('*')]:
+        os.chown(path, uid, gid, follow_symlinks=False)
+
+
 def initialize(args):
     peers = sorted(set(federation_peer(p) for p in getattr(args, 'federation_peer', [])))
     test_rate_profile = getattr(args, 'test_rate_profile', False)
@@ -136,8 +158,9 @@ def initialize(args):
     write(runtime / 'synapse/homeserver.yaml', config)
     spec = {'services':{
       'postgres':{'image':pins['postgres'],'environment':{'POSTGRES_USER':'synapse','POSTGRES_DB':'synapse','POSTGRES_PASSWORD_FILE':'/run/secrets/postgres-password','POSTGRES_INITDB_ARGS':'--encoding=UTF8 --locale=C'},'secrets':['postgres-password'],'volumes':['postgres:/var/lib/postgresql/data'],'networks':['private'],'healthcheck':{'test':['CMD-SHELL','pg_isready -h 127.0.0.1 -U synapse -d synapse'],'interval':'3s','timeout':'3s','retries':30},'restart':'unless-stopped' if args.mode == 'production' else 'no'},
-      'synapse':{'image':pins['synapse'],'user':f'{os.getuid()}:{os.getgid()}','environment':{'SYNAPSE_CONFIG_PATH':'/data/homeserver.yaml'},'volumes':[str(runtime / 'synapse')+':/data'],'ports':[f'127.0.0.1:{args.port}:8008'],'networks':['private','client'],'depends_on':{'postgres':{'condition':'service_healthy'}},'restart':'unless-stopped' if args.mode == 'production' else 'no'}},
+      'synapse':{'image':pins['synapse'],'user':synapse_user(),'environment':{'SYNAPSE_CONFIG_PATH':'/data/homeserver.yaml'},'volumes':[str(runtime / 'synapse')+':/data'],'ports':[f'127.0.0.1:{args.port}:8008'],'networks':['private','client'],'depends_on':{'postgres':{'condition':'service_healthy'}},'restart':'unless-stopped' if args.mode == 'production' else 'no'}},
       'secrets':{'postgres-password':{'file':str(runtime/'postgres-password')}},'volumes':{'postgres':{}},'networks':{'private':{'internal':True},'client':{}}}
+    prepare_synapse_ownership(runtime, spec)
     write(runtime/'compose.json',spec)
     write(runtime/'state.json',{**state,'runtime':str(runtime)})
     write(runtime/'client-config.json',{'homeserverUrl':url,'serverName':args.server_name,'federationPolicy':'explicit-peers' if peers else 'disabled', 'federationPeers':peers})

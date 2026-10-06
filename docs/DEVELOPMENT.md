@@ -1,5 +1,7 @@
 # Work on Clean Bookface
 
+> This guide runs the older v0.1 server application. For the encrypted browser and its checks, use [encrypted client development](../encrypted-client/README.md).
+
 This guide is for running the app locally and contributing code. To join a circle or import your history, use [Getting started](GETTING_STARTED.md). For a server with real members, follow [Installation](INSTALL.md) and [Operations](OPERATIONS.md).
 
 ## Try the fictional demo

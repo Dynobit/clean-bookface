@@ -1,3 +1,4 @@
+import { forgetDeviceCrypto } from './local-cleanup';
 import {
   createClient,
   ClientEvent,
@@ -50,6 +51,9 @@ export interface VerificationView {
   compare?: () => Promise<void>;
   confirm?: () => Promise<void>;
   mismatch?: () => void;
+  cancellationCode?: string;
+  cancelledBy?: string;
+  failure?: string;
   cancel: () => Promise<void>;
 }
 const quiet: Logger = {
@@ -65,9 +69,49 @@ const quiet: Logger = {
 // Legacy SDK call sites use the global logger rather than the client logger.
 // Rust's StoreHandle and OlmMachine receive the client's quiet logger explicitly.
 Object.assign(sdkLogger, quiet, { log() {} });
+/**
+ * Synapse 1.162 caches initial sync by the raw inline filter, ignoring the SDK's
+ * _cacheBuster. Give each initial request a namespaced filter extension so a
+ * reopened device cannot replay a pre-recovery account-data snapshot. The
+ * extension is ignored by filtering; no persistent server filter is created.
+ */
+export function freshInitialSyncFetch(
+  baseUrl: string,
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+): typeof fetch {
+  const origin = new URL(baseUrl).origin;
+  return async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (
+      url.origin !== origin ||
+      !/^\/_matrix\/client\/(v3|r0)\/sync$/.test(url.pathname) ||
+      url.searchParams.has('since')
+    )
+      return fetcher(input, init);
+    const raw = url.searchParams.get('filter');
+    let filter: unknown;
+    try {
+      filter = raw === null ? null : JSON.parse(raw);
+    } catch {
+      throw new Error('Initial encrypted sync requires a valid inline filter.');
+    }
+    if (!filter || typeof filter !== 'object' || Array.isArray(filter))
+      throw new Error('Initial encrypted sync requires a valid inline filter.');
+    url.searchParams.set(
+      'filter',
+      JSON.stringify({ ...filter, 'org.cleanbookface.sync_instance': crypto.randomUUID() }),
+    );
+    return fetcher(input instanceof Request ? new Request(url, input) : url, init);
+  };
+}
 /** This archive app has no calling feature or peer-to-peer media transport. */
 export function createArchiveClient(options: Parameters<typeof createClient>[0]): MatrixClient {
-  return createClient({ ...options, logger: quiet, disableVoip: true });
+  return createClient({
+    ...options,
+    fetchFn: freshInitialSyncFetch(options.baseUrl, options.fetchFn),
+    logger: quiet,
+    disableVoip: true,
+  });
 }
 /** Prove ratchet coverage in an isolated, memory-only Rust store; never alter live keys. */
 export async function backupKeyCoversLocal(
@@ -308,9 +352,14 @@ export class Identity {
       this.session.userId,
       this.session.deviceId,
     );
+    const recoveryStatus = await this.crypto.getSecretStorageStatus();
     return {
       hasIdentity,
-      recoveryReady: await this.crypto.isSecretStorageReady(),
+      recoveryConfigured: await this.client.secretStorage.hasKey(),
+      recoveryMissingSecrets: Object.entries(recoveryStatus.secretStorageKeyValidityMap)
+        .filter(([, valid]) => !valid)
+        .map(([name]) => name),
+      recoveryReady: recoveryStatus.ready,
       ownDeviceTrusted: own?.crossSigningVerified ?? false,
       crossSigningReady: await this.crypto.isCrossSigningReady(),
     };
@@ -640,6 +689,7 @@ export class Identity {
     this.watched.add(request);
     const id = request.transactionId ?? crypto.randomUUID();
     let sas: ShowSasCallbacks | null = null;
+    let failure: string | undefined;
     const emit = () => {
       const verifier = request.verifier;
       if (verifier && !this.verifiers.has(verifier)) {
@@ -650,13 +700,19 @@ export class Identity {
         });
         verifier.on(VerifierEvent.Cancel, () => emit());
         sas = verifier.getShowSasCallbacks();
-        void verifier.verify().then(emit, () => emit());
+        void verifier.verify().then(emit, () => {
+          failure = 'The identity comparison did not finish. Start a new check with your friend.';
+          emit();
+        });
       }
       const active = request.phase === VerificationPhase.Started;
       this.onVerification?.({
         id,
         peer: request.otherUserId,
         phase: VerificationPhase[request.phase].toLowerCase(),
+        ...(request.cancellationCode ? { cancellationCode: request.cancellationCode } : {}),
+        ...(request.cancellingUserId ? { cancelledBy: request.cancellingUserId } : {}),
+        ...(failure ? { failure } : {}),
         ...(request.phase === VerificationPhase.Requested && !request.initiatedByMe
           ? { accept: () => request.accept() }
           : {}),
@@ -681,6 +737,11 @@ export class Identity {
     };
     request.on(VerificationRequestEvent.Change, emit);
     emit();
+  }
+  /** Call only after confirmed backup and successful logout or deactivation. */
+  async forgetDevice(): Promise<void> {
+    this.close();
+    await forgetDeviceCrypto(this.session);
   }
   close(): void {
     this.client.stopClient();

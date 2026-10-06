@@ -1,6 +1,6 @@
 # The encrypted browser version
 
-Status: development on `privacy-next`. The live v0.1 preview does not provide end-to-end encryption. Its existing host-access disclosure still applies.
+Status: encrypted preview under release qualification, 6 October 2026. The separate v0.1 application does not provide end-to-end encryption. Its existing host-access disclosure still applies.
 
 ## What people should experience
 
@@ -19,7 +19,7 @@ This depends on using a trusted copy of the browser application delivered indepe
 - Keep login recovery separate from content recovery. A server password reset cannot unlock an archive. A verified existing device or the user’s recovery kit is needed. Explain this once, plainly, before a large import.
 - Support one active homeserver first. An optional second host keeps an encrypted backup for recovery. It is not a second simultaneous writer and does not imply zero downtime.
 
-The extra hosting components are a deliberate choice approved for the full encrypted browser experience. The existing small v0.1 installation remains available while the successor is built and tested.
+The extra hosting components are a deliberate choice approved for the full encrypted browser experience. The existing small v0.1 installation remains available for existing hosts and the deliberate export-and-import migration path.
 
 ## Two hosts and reliability
 
@@ -35,7 +35,7 @@ Do not rewrite or remove an existing archive in place. Download through the exis
 
 Data already uploaded in plaintext was already accessible to the old host. Encryption cannot change that history. Old databases, write-ahead logs, exports, staging files, backups and recipients’ copies need separate retention and removal handling.
 
-Imports are immutable encrypted batches, reconciled by stable record identity. Two browsers must retain both sets of additions; conflicting versions remain available rather than silently choosing a winner. A text-publication retry currently persists in an encrypted outbox on its originating browser. Moving an unfinished outbox to another device remains an integration task.
+Imports are immutable encrypted batches, reconciled by stable record identity. Two browsers must retain both sets of additions; conflicting versions remain available rather than silently choosing a winner. Post, comment, reaction and removal retries persist in an encrypted outbox on the originating browser. Moving unfinished changes to another device is not supported; finish or explicitly stop them before signing out. Facebook ZIPs are read into bounded, resumable encrypted batches. Canonical v0.1 account exports import privately and retain original records and media; settings and friendships are not recreated.
 
 ## Acceptance before release
 
@@ -52,7 +52,7 @@ Hosts can still observe account identifiers, traffic timing, object sizes and de
 
 ## Measured progress
 
-The [browser qualification record](../encrypted-client/QUALIFICATION.md) covers invitations, recovery after device deletion, selected sharing between separate homes, large encrypted media and a restored standby. The [host qualification record](../encrypted-host/QUALIFICATION.md) separates local protocol and backup proofs from untested production routes. These are development results; the public preview keeps its existing host-access disclosure.
+The [browser qualification record](../encrypted-client/QUALIFICATION.md) covers invitations, recovery after device deletion, comments, reactions, block persistence, selected-evidence reports, account closure, actual v0.1 migration, resumable large imports and a restored standby. The [host qualification record](../encrypted-host/QUALIFICATION.md) separates local protocol and backup proofs from untested production routes. These records distinguish development results from the selected public deployment. The v0.1 preview keeps its existing host-access disclosure; its earlier results do not qualify the encrypted client.
 
 ## Technical references
 

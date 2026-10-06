@@ -1,8 +1,20 @@
-# v0.1 release qualification
+# Release qualification
+
+## Encrypted preview, 6 October 2026
+
+The v0.2 browser client and storage home are separate from the earlier v0.1 application. The encrypted preview includes invited accounts, recovery kits, private Facebook imports, verified pairwise sharing, photos, comments, reactions, blocking, selected-evidence reports and account closure. Saved imports can be searched and exported in the browser. Existing v0.1 accounts can export and import a separate encrypted copy; no installation becomes encrypted automatically.
+
+The source also includes installation, restricted HTTPS delivery, optional cross-home connections, encrypted backups, a daily scheduler with backup-health reporting and fenced recovery on a second machine. One home is active at a time. Two machines in one location do not establish geographic disaster recovery, and a server backup does not replace a member's recovery kit.
+
+This is a **preview for fictional data**, not an independently audited security release. Independent human security and accessibility reviews and the five-person usability study are still open. The browser publisher remains trusted; a storage operator who can replace the browser code can steal keys. Homes retain connection and membership metadata. Recipients and older backups can retain copies.
+
+Current reproducible client and host evidence, including failed attempts and measured limits, is recorded in [client qualification](../encrypted-client/QUALIFICATION.md) and [host qualification](../encrypted-host/QUALIFICATION.md). The [beginner guide](ENCRYPTED_GETTING_STARTED.md), [hosting choices](ENCRYPTED_HOSTING.md) and [installation procedure](../encrypted-host/SELF_HOST.md) describe this version. The earlier release record below applies only to v0.1.
+
+## Historical v0.1 qualification
 
 The owner approved the v0.1 public preview of the source and project website on 5 October 2026. Public source availability and the project website are verified. This release offers no official hosting or public sign-up service and does not upgrade the operator-only pilot. Independent human security and accessibility review and the five-person usability study remain open; the requested exact Opus review was unavailable. The dated evidence below records its original scope, including earlier private checkpoints.
 
-## Current public status, 5 October 2026
+## Historical public status, 5 October 2026
 
 - The released application is [v0.1.0-preview.1](https://github.com/Dynobit/clean-bookface/releases/tag/v0.1.0-preview.1), at `2b9b110`. Its host can read stored data; it is not end-to-end encrypted.
 - The runner outage is resolved. [GitHub run 37371375764, attempt 2](https://github.com/Dynobit/clean-bookface/actions/runs/37371375764), passed for that exact released commit, including browser, container and provider checks. The original failed attempts remain in the historical record below.

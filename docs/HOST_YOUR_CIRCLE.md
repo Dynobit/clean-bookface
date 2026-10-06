@@ -1,5 +1,7 @@
 # Host your own circle
 
+> This page describes the older **v0.1 application**. For the encrypted version, use the [member guide](ENCRYPTED_GETTING_STARTED.md), [hosting guide](../encrypted-host/SELF_HOST.md) and [encryption contract](ENCRYPTION.md). The two versions have different privacy and hosting requirements.
+
 Your memories belong with you. You can keep a private archive here, then choose what to share and with whom. Importing never publishes your Facebook history.
 
 **Just joining a friend?** You do not need a server or any of these commands. Ask them for an invitation and follow the [member guide](GETTING_STARTED.md).

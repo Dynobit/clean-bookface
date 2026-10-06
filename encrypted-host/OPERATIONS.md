@@ -39,6 +39,8 @@ Cleanup targets only the generated project and its volume. It deliberately retai
 
 ## Production preparation
 
+For the complete closed-home automatic HTTPS and daily-backup installation, use [SELF_HOST.md](SELF_HOST.md). The low-level preparation below remains useful for separately managed proxies.
+
 ```sh
 python3 encrypted-host/host.py bootstrap \
   --mode production --runtime /srv/clean-bookface-encrypted \
@@ -47,7 +49,7 @@ python3 encrypted-host/host.py bootstrap \
 
 This starts a loopback-only stack and creates no public route. Choose the permanent server name before creating real accounts: it is part of every Matrix identity. Production mode generates no fictional member accounts. Production services use Docker `restart: unless-stopped`; disposable local services use `restart: no`. This does not provide failover, backups, or permission to restart an existing installation.
 
-A separately reviewed HTTPS proxy must forward `/_matrix/client/` and required Matrix media paths to loopback 8008's published port. Do not expose `/_synapse/admin/`, `/_matrix/federation/`, `/_matrix/key/`, or the runtime directory. Synapse `x_forwarded` is enabled only in production; the proxy must replace, not trust incoming forwarded-IP headers. TLS, hostname verification, request limits, storage quotas, admission UX, recovery, monitoring and independent security review remain deployment gates. No existing project proxy configuration should be silently extended.
+A separately reviewed HTTPS proxy must forward `/_matrix/client/` and required Matrix media paths to loopback 8008's published port. Do not expose `/_synapse/admin/`, `/_matrix/federation/`, `/_matrix/key/`, or the runtime directory. Synapse `x_forwarded` is enabled only in production; the proxy must replace incoming forwarded-IP headers. The explicit Cloudflare loopback transport may use validated CF-Connecting-IP from its trusted local tunnel; see SELF_HOST.md for that narrow trust boundary. TLS, hostname verification, request limits, storage quotas, admission UX, recovery, monitoring and independent security review remain deployment gates. No existing project proxy configuration should be silently extended.
 
 For optional cross-home friendships, follow [the explicit peer federation recipe](FEDERATION.md). It adds only the selected peer identities and federation listener. Production HTTPS routing, discovery, abuse controls and browser encrypted delivery still require qualification on the selected installations. Do not remove the allowlist or repurpose existing v0.1 routes to make a test pass.
 
@@ -101,7 +103,7 @@ python3 encrypted-host/recovery.py backup --runtime /srv/clean-bookface-encrypte
 
 `--sftp-port` defaults to 22. Automatic local restore drills accept these same SFTP options in place of `--repository`. The second host receives the restic-encrypted archive, not plaintext accounts or signing keys. Keep the recovery password separate from the repository and SSH directory. A writable SFTP account is not an immutable backup: credential compromise can delete snapshots, so independently protected retention is a separate host/provider requirement.
 
-There is no automatic deletion, `forget`, pruning or retention schedule: every successful snapshot is retained until the operator deliberately removes it. Monitor free space, last-success age and restore results; full-data checks read every stored pack and can consume remote bandwidth and time. Choose a documented retention policy after measuring change volume and recoverability, and test its dry run before enabling deletion. No offsite provider, storage quota, price, account or automatic schedule is selected here. An SFTP command passing local validation is not proof of offsite recovery; actual second-host admission, transfer and restore still need qualification with the chosen account.
+There is no automatic deletion, `forget`, pruning or retention schedule: every successful snapshot is retained until the operator deliberately removes it. Monitor free space, last-success age and restore results; full-data checks read every stored pack and can consume remote bandwidth and time. Choose a documented retention policy after measuring change volume and recoverability, and test its dry run before enabling deletion. No offsite provider, storage quota, price or account is selected here. [The self-host guide](SELF_HOST.md) supplies a repeatable daily systemd schedule and backup-health CLI. An SFTP command passing local validation is not proof of offsite recovery; actual second-host admission, transfer and restore still need qualification with the chosen account.
 
 ## Disposable SFTP qualification
 
@@ -123,3 +125,5 @@ The new runtime must be outside source. The fixture generates its own server/cli
 - [Shared-secret admin bootstrap](https://element-hq.github.io/synapse/latest/admin_api/register_api.html)
 - [Restic SFTP repository setup](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html)
 - [Official backup requirements and one-time keys](https://element-hq.github.io/synapse/latest/usage/administration/backups.html)
+
+Moderation decision receipts (`moderation-decision-<16 hex digits>.json`) are included in encrypted host backups and restored with the suspended-account database state. Keep decision reasons in those private receipts; arbitrary external reason-file paths are not collected. Symlinked receipt files make backup fail closed.

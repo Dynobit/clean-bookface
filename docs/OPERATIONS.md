@@ -1,5 +1,7 @@
 # Running a circle without losing its memories
 
+> This page describes the older **v0.1 application**. For the encrypted version, use the [member guide](ENCRYPTED_GETTING_STARTED.md), [hosting guide](../encrypted-host/SELF_HOST.md) and [encryption contract](ENCRYPTION.md). The two versions have different privacy and hosting requirements.
+
 The app runs as one process with one SQLite database and a private `media` directory. Keep `DATA_DIR` on local durable storage. The server and host commands use the same exclusive installation lock. Do not run two application processes against one data directory, put SQLite on a network share, or bypass the lock to make a backup finish.
 
 The running database and media are plaintext to the host administrator. Encrypt the host's disk for protection when it is powered off. Backups below are encrypted separately. Neither measure is end-to-end encryption.

@@ -2,13 +2,24 @@ import { verificationUpdate } from './verification-view';
 import './style.css';
 import { Identity, type Session, type VerificationView } from './identity';
 import { ContentStore, type SharedPost } from './content';
-import { BrowserOutbox, type PendingPost } from './outbox';
-import { importArchives, exportArchives, type MemoryRecord } from './archive';
+import { BrowserOutbox, type PendingPost, type PendingSocial } from './outbox';
+import type { SocialAction } from './social';
+import {
+  setBlocked,
+  isBlocked,
+  blockedUsers,
+  reportSelectedEvidence,
+  deactivateAccount,
+} from './lifecycle';
+import { forgetDeviceCrypto } from './local-cleanup';
+import { importArchiveBatches } from './streaming-import';
+import { exportArchives, type MemoryRecord } from './archive';
 
 const app = document.querySelector<HTMLElement>('#app')!;
 const notice = document.querySelector<HTMLElement>('#notice')!;
 const verification = document.querySelector<HTMLElement>('#verification')!;
 const SESSION = 'clean-bookface.session.v1';
+const CLEANUP = 'clean-bookface.cleanup.v1';
 let identity: Identity | undefined;
 let content: ContentStore | undefined;
 let records: MemoryRecord[] = [];
@@ -20,6 +31,10 @@ let currentVerification = '';
 let loginPassword = '';
 let outbox: BrowserOutbox | undefined;
 let pendingPost: PendingPost | null = null;
+let pendingSocial: PendingSocial | null = null;
+let selectedArchivePart: number | null = null;
+type CleanupScope = Pick<Session, 'baseUrl' | 'userId' | 'deviceId'> & { message: string };
+let pendingCleanup: CleanupScope | undefined;
 
 // Only fixed markup is used in this file. All account/content values use textContent.
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -63,7 +78,15 @@ function field(
   return input;
 }
 function tell(message: string, error = false): void {
-  notice.textContent = message;
+  notice.replaceChildren();
+  if (message) {
+    const text = el('span', message);
+    const dismiss = el('button', '', 'dismiss-notice');
+    dismiss.type = 'button';
+    dismiss.setAttribute('aria-label', 'Dismiss this notice');
+    dismiss.onclick = () => notice.replaceChildren();
+    notice.append(text, dismiss);
+  }
   notice.className = error ? 'error' : '';
 }
 async function run(action: () => void | Promise<void>): Promise<void> {
@@ -210,6 +233,7 @@ function login(): void {
             'Choose a separate storage host. The host must not also deliver this browser app.',
           );
         loginPassword = password.value;
+        tell(mode.value === 'join' ? 'Creating your account…' : 'Signing in…');
         const session = await Identity.authenticate({
           baseUrl: host.value,
           username: username.value.trim(),
@@ -229,13 +253,16 @@ function login(): void {
   app.setAttribute('aria-busy', 'false');
 }
 async function openSession(session: Session): Promise<void> {
+  tell('Opening the secure browser and connecting to your home…');
   identity = await Identity.open(session, showVerification);
   content = new ContentStore(identity.client, (id) => identity!.requireVerifiedUser(id));
   outbox = await BrowserOutbox.open(session);
   pendingPost = await outbox.load();
+  pendingSocial = await outbox.loadSocial();
   const status = await identity.status();
+  tell('');
   if (!status.recoveryReady) {
-    recovery(false);
+    recovery(status.recoveryConfigured || status.hasIdentity);
     return;
   }
   if (!status.ownDeviceTrusted || !status.crossSigningReady) {
@@ -351,6 +378,7 @@ async function refresh(): Promise<void> {
   if (!content) return;
   tell('Opening your encrypted memories…');
   records = await content.privateArchive();
+  selectedArchivePart = null;
   feed = await content.posts();
   render();
   tell('');
@@ -388,7 +416,7 @@ function render(): void {
       center.append(
         el(
           'p',
-          `A conversation with ${locked.userId} is locked: ${locked.reason}. Open Friends to check their identity.`,
+          `A conversation with ${locked.userId} is locked: ${locked.reason}`,
           'notice-inline',
         ),
       );
@@ -399,7 +427,7 @@ function render(): void {
           'Add a friend, compare your identity check, and share something worth keeping.',
         ),
       );
-    else for (const p of feed) center.append(recordCard(p.record, p.sender, false, p.timestamp));
+    else for (const p of feed) center.append(recordCard(p.record, p.sender, false, p.timestamp, p));
   }
   if (section === 'memories') memories(center);
   if (section === 'friends') friends(center);
@@ -453,6 +481,27 @@ function audience(parent: HTMLElement): () => string[] {
   return () => [...chosen];
 }
 function composer(parent: HTMLElement): void {
+  if (pendingSocial) {
+    const pending = card('A conversation change is waiting');
+    pending.append(
+      el(
+        'p',
+        'Retry sends the same change, even after reopening this browser. Keep this browser until it finishes.',
+      ),
+      button('Finish this conversation change', finishSocial),
+      button(
+        'Stop retrying this change',
+        async () => {
+          await outbox!.clear('social');
+          pendingSocial = null;
+          render();
+          tell('Retries stopped. A change already received by your friend remains.');
+        },
+        'secondary',
+      ),
+    );
+    parent.append(pending);
+  }
   const c = card('What’s on your mind?');
   const text = el('textarea');
   text.setAttribute('aria-label', 'Write a post');
@@ -531,6 +580,16 @@ function composer(parent: HTMLElement): void {
 function memories(parent: HTMLElement): void {
   const c = card('Your memories, brought home');
   const overflow = content!.archiveOverflow();
+  if (selectedArchivePart !== null) {
+    c.append(
+      el(
+        'p',
+        `${selectedArchivePart ? `Viewing saved import ${selectedArchivePart}` : 'Viewing a saved import'}. Search and the visible-memory download cover this part only. Your other saved parts remain available below.`,
+        'notice-inline',
+      ),
+      button('Back to recent memories', refresh, 'secondary'),
+    );
+  }
   if (overflow)
     c.append(
       el(
@@ -562,7 +621,7 @@ function memories(parent: HTMLElement): void {
   c.append(
     el(
       'p',
-      'This preview accepts up to 256 MB of ZIP files at once. Original files stay on your computer.',
+      'Facebook downloads are read in small parts: up to 10 GiB in total, 50,000 memories and 64 MiB per original media file. Portable Clean Bookface exports retain a 256 MiB input limit. Your original files stay on your computer.',
       'help',
     ),
   );
@@ -571,16 +630,55 @@ function memories(parent: HTMLElement): void {
       'Bring in my memories',
       async () => {
         if (!input.files?.length) throw new Error('Choose an archive ZIP first.');
-        const imported = await importArchives([...input.files], {
-          onProgress: (done, total) => tell(`Reading your archive: ${done} of ${total} files`),
-        });
-        await content!.saveArchive(imported.records);
-        tell('Memories saved. Checking your encrypted recovery backup…');
-        await identity!.waitForKeyBackup();
-        await refresh();
-        tell(
-          `${imported.records.length} memories imported privately.${imported.warnings.length ? ` ${imported.warnings.join(' ')}` : ''}`,
-        );
+        const controller = new AbortController();
+        const progress = el('aside', '', 'import-progress');
+        const stop = el('button', 'Stop after this part', 'secondary');
+        stop.type = 'button';
+        stop.onclick = () => {
+          controller.abort();
+          stop.disabled = true;
+          stop.textContent = 'Stopping after the current save…';
+        };
+        progress.append(stop);
+        document.body.append(progress);
+        let count = 0,
+          accepted = 0,
+          confirmed = 0;
+        const warnings = new Set<string>();
+        try {
+          for await (const batch of importArchiveBatches([...input.files], {
+            signal: controller.signal,
+            onProgress: (p) =>
+              tell(
+                `Reading privately: ${p.records} memories · ${Math.round(p.decodedBytes / 1024 / 1024)} MiB read`,
+              ),
+          })) {
+            for (const warning of batch.warnings) warnings.add(warning);
+            if (!batch.records.length) continue;
+            tell(`Saving encrypted part ${accepted + 1}…`);
+            await content!.appendArchiveBatch(batch.records);
+            accepted++;
+            count += batch.records.length;
+            tell(`Checking recovery for part ${accepted}…`);
+            await identity!.waitForKeyBackup();
+            confirmed++;
+          }
+          await refresh();
+          tell(
+            `${count} memories imported privately in ${accepted} parts. Recovery checked.${warnings.size ? ` ${[...warnings].join(' ')}` : ''}`,
+          );
+        } catch (error) {
+          const reason = controller.signal.aborted
+            ? 'Import stopped.'
+            : error instanceof Error
+              ? error.message
+              : 'Import did not finish.';
+          throw new Error(
+            `${reason} ${accepted} parts saved; recovery confirmed for ${confirmed}. Keep this browser and your original ZIP files. Choose the same files to resume; saved parts are checked before another upload.`,
+          );
+        } finally {
+          progress.remove();
+        }
       },
       'form-action',
     ),
@@ -607,7 +705,9 @@ function memories(parent: HTMLElement): void {
   c.append(how);
   c.append(
     button(
-      overflow ? 'Download visible memories' : 'Download my archive',
+      overflow || selectedArchivePart !== null
+        ? 'Download visible memories'
+        : 'Download my archive',
       async () => {
         try {
           download(await exportArchives(records), 'clean-bookface-memories.zip');
@@ -632,7 +732,7 @@ function memories(parent: HTMLElement): void {
   parent.append(c);
   const search = field(parent, 'memory-search', 'Find a memory');
   search.type = 'search';
-  search.placeholder = 'Search on this browser';
+  search.placeholder = 'Search the memories currently shown';
   const results = el('div');
   parent.append(
     el('p', `${records.length} private memories${overflow ? ' in this view' : ''}`, 'help'),
@@ -654,6 +754,53 @@ function memories(parent: HTMLElement): void {
   };
   search.oninput = show;
   show();
+  parent.append(
+    button(
+      'Search every saved import',
+      async () => {
+        const query = search.value;
+        const found = await content!.searchArchive(search.value, 50, (n) =>
+          tell(`Searching privately: ${n} saved parts checked…`),
+        );
+        results.replaceChildren();
+        results.append(
+          el(
+            'p',
+            `${found.matches.length} matches${found.limited ? ' (showing the first 50)' : ''}. Repeated imports can contain the same memory.`,
+            'help',
+          ),
+        );
+        for (const hit of found.matches) {
+          const c = card(hit.title || 'Saved memory');
+          c.append(
+            el('p', hit.excerpt, 'post-body'),
+            button(
+              'Open this saved part',
+              async () => {
+                records = await content!.readArchiveBatch(hit.roomId, hit.eventId);
+                selectedArchivePart = 0;
+                render();
+                const search = app.querySelector<HTMLInputElement>('#memory-search');
+                if (search) {
+                  search.value = query;
+                  search.dispatchEvent(new Event('input'));
+                }
+                tell('Opened the matching saved part. Its original media is available here.');
+              },
+              'secondary',
+            ),
+          );
+          results.append(c);
+        }
+        tell(
+          found.limited
+            ? 'Search stopped at 50 matches. Narrow your words to find a particular memory.'
+            : `Search complete: ${found.partsChecked} saved parts checked.`,
+        );
+      },
+      'secondary form-action',
+    ),
+  );
 }
 function archiveDownloads(parent: HTMLElement, expanded: boolean): void {
   const details = el('details');
@@ -674,6 +821,17 @@ function archiveDownloads(parent: HTMLElement, expanded: boolean): void {
     for (const batch of page.batches) {
       const number = ++count;
       list.append(
+        button(
+          `View saved import ${number}`,
+          async () => {
+            records = await content!.readArchiveBatch(batch.roomId, batch.eventId);
+            selectedArchivePart = number;
+            section = 'memories';
+            render();
+            tell(`Opened saved import ${number}. Nothing was shared.`);
+          },
+          'secondary form-action',
+        ),
         button(
           `Download saved import ${number}`,
           async () => {
@@ -700,6 +858,7 @@ function recordCard(
   sender: string,
   privateRecord: boolean,
   sentAt?: number,
+  shared?: SharedPost,
 ): HTMLElement {
   const c = el('article', '', 'card');
   const head = el('div', '', 'post-head');
@@ -732,6 +891,7 @@ function recordCard(
     } else media.append(el('p', `${a.mimeType} attachment · included in your download`, 'help'));
   }
   c.append(media);
+  if (shared) conversation(c, shared);
   if (privateRecord) {
     c.append(el('span', 'Private · only you', 'pill'));
     if (!record.privateOnly && !['message', 'friend'].includes(record.kind)) {
@@ -754,6 +914,144 @@ function recordCard(
     }
   }
   return c;
+}
+async function queueSocial(post: SharedPost, action: SocialAction): Promise<void> {
+  if (pendingSocial) throw new Error('Finish or stop the waiting conversation change first.');
+  const queued: PendingSocial = {
+    post: { roomId: post.roomId, id: post.id, sender: post.sender },
+    operationId: crypto.randomUUID(),
+    action,
+  };
+  await outbox!.saveSocial(queued);
+  pendingSocial = queued;
+  await finishSocial();
+}
+async function finishSocial(): Promise<void> {
+  if (!pendingSocial) return;
+  const { post, action, operationId } = pendingSocial;
+  try {
+    if (action.kind === 'comment') await content!.addComment(post, action.text, operationId);
+    else if (action.kind === 'remove-comment')
+      await content!.removeComment(post, action.commentId, operationId);
+    else if (action.kind === 'reaction')
+      await content!.setReaction(post, action.reaction, operationId);
+    else await content!.removePost(post, operationId);
+    await identity!.waitForKeyBackup();
+    await outbox!.clear('social');
+    pendingSocial = null;
+    await refresh();
+    tell('Conversation updated. Recovery backup checked.');
+  } catch (error) {
+    render();
+    throw error;
+  }
+}
+function conversation(c: HTMLElement, post: SharedPost): void {
+  const friend =
+    content!.friendRooms().find((r) => r.roomId === post.roomId)?.userId || post.sender;
+  c.append(
+    el('p', `A conversation between you and ${friend}. Replies stay in this conversation.`, 'help'),
+  );
+  const actions = el('div', '', 'post-actions');
+  const reaction = el('select');
+  reaction.setAttribute('aria-label', 'Your reaction');
+  for (const [value, label] of [
+    ['', 'No reaction'],
+    ['♥', 'Love'],
+    ['👍', 'Like'],
+    ['😂', 'Laugh'],
+    ['😮', 'Wow'],
+    ['😢', 'Sad'],
+  ]) {
+    const option = el('option', label);
+    option.value = value;
+    reaction.append(option);
+  }
+  reaction.value =
+    post.reactions.find((r) => r.sender === identity!.session.userId)?.reaction || '';
+  actions.append(
+    reaction,
+    button(
+      'Save reaction',
+      () => queueSocial(post, { kind: 'reaction', reaction: reaction.value || null }),
+      'small secondary',
+    ),
+  );
+  if (post.sender === identity!.session.userId)
+    actions.append(
+      button(
+        'Remove this shared copy',
+        () => queueSocial(post, { kind: 'remove-post' }),
+        'small danger',
+      ),
+    );
+  c.append(actions);
+  for (const r of post.reactions) c.append(el('p', `${r.reaction} ${r.sender}`, 'help'));
+  const comments = el('div', '', 'comments');
+  for (const comment of post.comments) {
+    const row = el('div', '', 'comment');
+    row.append(el('strong', comment.sender), el('p', comment.text, 'post-body'));
+    if (comment.sender === identity!.session.userId)
+      row.append(
+        button(
+          'Remove my comment',
+          () => queueSocial(post, { kind: 'remove-comment', commentId: comment.id }),
+          'small danger',
+        ),
+      );
+    comments.append(row);
+  }
+  c.append(comments);
+  const reply = el('textarea');
+  reply.maxLength = 4000;
+  reply.setAttribute('aria-label', 'Write a comment');
+  reply.placeholder = 'Say something to your friend…';
+  c.append(
+    reply,
+    button(
+      'Send comment',
+      () => queueSocial(post, { kind: 'comment', text: reply.value }),
+      'small form-action',
+    ),
+  );
+  if (post.sender !== identity!.session.userId) {
+    const report = el('details');
+    report.append(el('summary', 'Report this post'));
+    report.append(
+      el(
+        'p',
+        'Your home’s moderator receives the explanation and text you select below in readable form. No archive, photo or encryption key is included.',
+        'help',
+      ),
+    );
+    const reason = field(report, `report-${crypto.randomUUID()}`, 'What happened?');
+    reason.maxLength = 1000;
+    const evidence = el('textarea');
+    evidence.maxLength = 4000;
+    evidence.setAttribute('aria-label', 'Text to include in report');
+    report.append(
+      evidence,
+      button(
+        'Use this post’s text',
+        () => {
+          evidence.value = post.record.text.slice(0, 4000);
+        },
+        'small secondary',
+      ),
+      button(
+        'Send selected evidence to my host',
+        async () => {
+          await reportSelectedEvidence(identity!.client, post, reason.value, evidence.value);
+          reason.value = '';
+          evidence.value = '';
+          report.open = false;
+          tell('Your selected report was sent to your home’s moderator.');
+        },
+        'small danger',
+      ),
+    );
+    c.append(report);
+  }
 }
 function friends(parent: HTMLElement): void {
   const c = card('Keep it to your people');
@@ -801,6 +1099,16 @@ function friends(parent: HTMLElement): void {
         },
         'small danger',
       ),
+      button(
+        'Block this account',
+        async () => {
+          await content!.revokeFriend(friend.userId);
+          await setBlocked(identity!.client, friend.userId, true);
+          await refresh();
+          tell('Blocked. This account will not receive new posts or invitations from you.');
+        },
+        'small danger',
+      ),
     );
     li.append(row);
     list.append(li);
@@ -812,6 +1120,7 @@ function friends(parent: HTMLElement): void {
     const pending = card('Friend invitation');
     const inviter =
       room.getMember(identity!.session.userId)?.events.member?.getSender() || 'Unknown account';
+    if (isBlocked(identity!.client, inviter)) continue;
     pending.append(
       el('p', inviter),
       button('Accept friend invitation', async () => {
@@ -819,10 +1128,41 @@ function friends(parent: HTMLElement): void {
         render();
         tell('Accepted. Check their identity before sharing.');
       }),
+      button(
+        'Decline invitation',
+        async () => {
+          await identity!.client.leave(room.roomId);
+          await refresh();
+        },
+        'secondary',
+      ),
     );
     parent.append(pending);
   }
   parent.append(button('Check for invitations', refresh, 'secondary'));
+  const blocked = blockedUsers(identity!.client);
+  if (blocked.length) {
+    const c = card('Blocked accounts');
+    for (const userId of blocked) {
+      const row = el('div', '', 'row');
+      row.append(
+        el('p', userId),
+        button(
+          'Unblock account',
+          async () => {
+            await setBlocked(identity!.client, userId, false);
+            render();
+            tell(
+              'Unblocked. Adding them as a friend again needs a new invitation and identity check.',
+            );
+          },
+          'small secondary',
+        ),
+      );
+      c.append(row);
+    }
+    parent.append(c);
+  }
 }
 function account(parent: HTMLElement): void {
   const c = card('Your account');
@@ -860,9 +1200,39 @@ function account(parent: HTMLElement): void {
     button('Sign out of this browser', signOut, 'secondary'),
   );
   parent.append(c);
+  const close = el('details', '', 'card');
+  close.append(el('summary', 'Close my account'));
+  close.append(
+    el(
+      'p',
+      'Download your memories first. Closing removes account access and this browser’s keys, and asks your home to erase your profile. Friends may keep shared copies; encrypted events, media and backups can remain on hosts until their retention policy removes them. Contact your host about retained storage.',
+    ),
+  );
+  const confirmation = field(
+    close,
+    'close-account-confirmation',
+    'Type your complete account name',
+  );
+  const password = field(close, 'close-account-password', 'Confirm your password', 'password');
+  close.append(
+    button(
+      'Close this account permanently',
+      async () => {
+        if (pendingPost || pendingSocial)
+          throw new Error(
+            'Finish or stop waiting changes in News feed before closing your account.',
+          );
+        await deactivateAccount(identity!.client, confirmation.value, password.value);
+        password.value = '';
+        await exitLocally('Your account is closed. This browser’s keys have been removed.');
+      },
+      'danger form-action',
+    ),
+  );
+  parent.append(close);
 }
 async function signOut(): Promise<void> {
-  if (pendingPost)
+  if (pendingPost || pendingSocial)
     throw new Error(
       'A post is waiting to finish sending. Open News feed and retry before signing out.',
     );
@@ -875,19 +1245,85 @@ async function signOut(): Promise<void> {
       await identity.waitForKeyBackup();
     }
     await identity.client.logout(true);
-    identity.close();
   }
-  outbox?.close();
-  outbox = undefined;
-  identity = undefined;
-  content = undefined;
-  records = [];
-  feed = [];
-  loginPassword = '';
-  localStorage.removeItem(SESSION);
-  verification.replaceChildren();
-  login();
-  tell('Signed out.');
+  await exitLocally('Signed out. This browser’s keys have been removed.');
+}
+async function exitLocally(message: string): Promise<void> {
+  const session = identity!.session;
+  // The in-memory scope exists before storage is touched. A full localStorage
+  // must never prevent stopping a logged-out client or deleting its crypto keys.
+  pendingCleanup = {
+    baseUrl: session.baseUrl,
+    userId: session.userId,
+    deviceId: session.deviceId,
+    message,
+  };
+  try {
+    // Exact scope only: no access token or recovery secret in the retry journal.
+    localStorage.setItem(CLEANUP, JSON.stringify(pendingCleanup));
+  } catch {
+    // Cleanup can still finish now. A failed cleanup explicitly says to keep
+    // this tab open, since a storage failure prevents a durable retry journal.
+  }
+  try {
+    identity!.close();
+  } finally {
+    outbox?.close();
+    outbox = undefined;
+    identity = undefined;
+    content = undefined;
+    records = [];
+    feed = [];
+    pendingPost = null;
+    pendingSocial = null;
+    loginPassword = '';
+    currentVerification = '';
+    selectedArchivePart = null;
+    verification.replaceChildren();
+    clear();
+  }
+  await finishCleanup();
+}
+async function finishCleanup(): Promise<void> {
+  try {
+    if (!pendingCleanup) {
+      const raw = localStorage.getItem(CLEANUP);
+      if (!raw) return;
+      const value = JSON.parse(raw);
+      if (
+        !['baseUrl', 'userId', 'deviceId', 'message'].every(
+          (key) => typeof value?.[key] === 'string' && value[key],
+        )
+      )
+        throw new Error('Invalid local cleanup record');
+      pendingCleanup = value as CleanupScope;
+    }
+    const scope = pendingCleanup;
+    // Try all independent removals, even if session storage has become blocked.
+    const results = await Promise.allSettled([
+      forgetDeviceCrypto(scope),
+      BrowserOutbox.forgetSession(scope),
+      Promise.resolve().then(() => localStorage.removeItem(SESSION)),
+    ]);
+    if (results.some((result) => result.status === 'rejected'))
+      throw new Error('Local cleanup remains incomplete');
+    localStorage.removeItem(CLEANUP);
+    pendingCleanup = undefined;
+    login();
+    tell(scope.message);
+  } catch {
+    clear();
+    const c = card('Finish removing this browser’s keys');
+    c.append(
+      el(
+        'p',
+        'Server sign-out or account closure has finished. Local keys or sign-in storage could not all be removed. Keep this tab open, close other tabs for this app, then retry. If browser storage stays blocked, clear this app’s site data in your browser settings.',
+      ),
+      button('Retry local key removal', finishCleanup),
+    );
+    app.append(c);
+    tell('Local key removal is incomplete.', true);
+  }
 }
 function showVerification(view: VerificationView): void {
   const update = verificationUpdate(currentVerification, view);
@@ -906,7 +1342,7 @@ function showVerification(view: VerificationView): void {
     tell(
       view.phase === 'done'
         ? 'Identity checked. You can now share.'
-        : 'Identity check cancelled. Nothing was shared.',
+        : `Identity check cancelled${view.cancellationCode ? ` (${view.cancellationCode})` : ''}. Nothing was shared. Start one new check together.`,
     );
     return;
   }
@@ -917,6 +1353,7 @@ function showVerification(view: VerificationView): void {
       'help',
     ),
   );
+  if (view.failure) c.append(el('p', view.failure, 'error-text'));
   if (view.emoji) {
     const sas = el('div', '', 'sas');
     for (const [emoji, name] of view.emoji) {
@@ -948,7 +1385,8 @@ window.addEventListener('pagehide', () => {
   outbox?.close();
 });
 const saved = sessionFromStorage();
-if (saved)
+if (localStorage.getItem(CLEANUP)) void run(finishCleanup);
+else if (saved)
   void run(async () => {
     try {
       await openSession(saved);

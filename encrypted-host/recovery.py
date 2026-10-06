@@ -2,7 +2,7 @@
 """Encrypted, stopped-primary backups and an isolated local standby drill."""
 import contextlib, fcntl, signal
 import argparse, json, os, pathlib, re, secrets, shlex, shutil, subprocess, tempfile, time
-from host import compose, ready, run, write, ROOT
+from host import compose, ready, run, write, ROOT, prepare_synapse_ownership
 RESTIC='restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510'
 
 def outside_source(path):
@@ -120,10 +120,19 @@ def capture_snapshot(state, stage, leave_stopped=False):
     try:
         compose(state,'stop','synapse')
         (stage/'payload').mkdir()
-        for name in ['synapse','state.json','compose.json','postgres-password','client-config.json','admin.json','fictional-credentials.json']:
+        for name in ['synapse','state.json','compose.json','postgres-password','client-config.json','admin.json','fictional-credentials.json','Caddyfile','hosting.json']:
             source=state['runtime']/name; target=stage/'payload'/name
             if source.is_dir(): shutil.copytree(source,target)
             elif source.exists(): shutil.copy2(source,target)
+        # Preserve the local decision audit alongside the database suspension state.
+        # Only this tool's receipt filenames belong in the encrypted snapshot;
+        # never follow a receipt symlink or read an external reason-file path.
+        for source in state['runtime'].glob('moderation-decision-*.json'):
+            if not re.fullmatch(r'moderation-decision-[a-f0-9]{16}\.json', source.name):
+                continue
+            if source.is_symlink() or not source.is_file():
+                raise RuntimeError('Moderation receipts must be regular runtime files')
+            shutil.copy2(source, stage/'payload'/source.name)
         with (stage/'payload/database.dump').open('wb') as out:
             compose(state,'exec','-T','postgres','pg_dump','-U','synapse','-d','synapse','-Fc','--exclude-table-data=e2e_one_time_keys_json',stdout=out)
     finally:
@@ -195,6 +204,7 @@ def main():
                 with (dest/'database.dump').open('rb') as inp:
                     compose(restored,'exec','-T','postgres','pg_restore','-U','synapse','-d','synapse','--exit-on-error',stdin=inp)
                 compose(restored,'exec','-T','postgres','psql','-U','synapse','-d','synapse','-c','TRUNCATE e2e_one_time_keys_json;')
+                prepare_synapse_ownership(dest, spec)
                 compose(restored,'up','-d','synapse');ready(restored)
                 (dest/'database.dump').unlink()
             print('Standby restored in same-machine simulated failure domain. Primary remains stopped.')

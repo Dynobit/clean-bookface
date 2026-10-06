@@ -100,7 +100,7 @@
               <h1 id="profile-name">Clean Bookface</h1>
               <p>Your friends. Your memories. Your rules.</p>
             </div>
-            <span class="release-tag">v0.1 public preview</span>
+            <span class="release-tag">Encrypted preview</span>
           </div>
           <nav class="profile-tabs" aria-label="Quick links">
             <a href="#join">I have an invitation</a><a href="#start">Bring my memories</a
@@ -143,8 +143,9 @@
           <div class="comment-strip">
             <span class="tiny-avatar" aria-hidden="true">↳</span>
             <p>
-              <strong>A small but important detail:</strong> this is the project’s front door. Your
-              circle has its own address and sign-in. Never enter your Facebook password here.
+              <strong>A small but important detail:</strong> this is the project’s front door.
+              <a href="https://app.cleanbookface.org/">Open the encrypted app</a> with an invitation
+              from your host. Never enter your Facebook password here.
             </p>
           </div>
         </section>
@@ -168,7 +169,8 @@
                     friend for an invitation. Nobody hosts one yet?
                     <a href="#host">Set up a small circle together.</a> If you already have an
                     invitation, open the personal link your friend sent and follow its sign-up
-                    steps. Save your recovery codes. You do not need a GitHub account to join.
+                    steps. Save your recovery kit privately. You do not need a GitHub account to
+                    join.
                   </p>
                 </div>
               </li>
@@ -192,11 +194,11 @@
               <li>
                 <span class="step-number" aria-hidden="true">3</span>
                 <div>
-                  <h3>Open “Bring your history” in your circle</h3>
+                  <h3>Open “My memories” in the app</h3>
                   <p>
-                    Upload the download, then check your photos, stories and import report. Your
-                    archive starts <strong>visible only to you</strong> through the app. Your host
-                    administrator can read stored data.
+                    Select all the ZIP parts together, keep the tab open and check the import
+                    warnings. Your browser encrypts memories before saving them to your home.
+                    Nothing is shared until you choose.
                   </p>
                 </div>
               </li>
@@ -205,8 +207,9 @@
                 <div>
                   <h3>Share one thing with one friend</h3>
                   <p>
-                    Accept each other as friends. Pick a photo or post, review the copy, and choose
-                    who sees it. Importing a friend list never contacts anyone.
+                    Accept each other as friends and compare the identity check over a call. Pick a
+                    photo or post, review the copy, and choose who sees it. Importing a friend list
+                    never contacts anyone.
                   </p>
                 </div>
               </li>
@@ -221,7 +224,8 @@
             </p>
           </div>
           <div class="card-bottom">
-            <a href="https://github.com/Dynobit/clean-bookface/blob/main/docs/GETTING_STARTED.md"
+            <a
+              href="https://github.com/Dynobit/clean-bookface/blob/main/docs/ENCRYPTED_GETTING_STARTED.md"
               >Full beginner’s guide, including split downloads and missing photos →</a
             >
           </div>
@@ -234,22 +238,24 @@
           </div>
           <div class="card-content">
             <p>A familiar feed, private albums, comments, and an actual end to the page.</p>
-            <a class="desktop-preview" href="assets/feed-desktop.png"
+            <a class="desktop-preview" href="assets/encrypted-feed-desktop.png"
               ><img
-                src="assets/feed-desktop.png"
+                src="assets/encrypted-feed-desktop.png"
                 width="1440"
-                height="1100"
+                height="1928"
                 loading="lazy"
                 alt="Working Clean Bookface app: blue navigation, a chronological feed, and private memories in the sidebar"
             /></a>
-            <p class="caption">Actual app screenshot. All people and posts are fictional.</p>
+            <p class="caption">
+              Actual encrypted-app screenshot. All accounts and posts are fictional.
+            </p>
             <details class="phone-details">
               <summary>See it on a phone</summary>
-              <a href="assets/feed-mobile.png"
+              <a href="assets/encrypted-feed-mobile.png"
                 ><img
-                  src="assets/feed-mobile.png"
+                  src="assets/encrypted-feed-mobile.png"
                   width="390"
-                  height="1760"
+                  height="1998"
                   loading="lazy"
                   alt="The working app on a phone, with a compact feed and navigation"
               /></a>
@@ -278,20 +284,21 @@
             <div class="hosting-choice">
               <strong>Want to run your own?</strong>
               <p>
-                Choose a server and a permanent address. Our short setup helper asks for your domain
-                and circle name, checks the basics and starts the application. Then the built-in
-                host checklist walks you through your first backup and invitation.
+                Choose a supported server and a permanent address. The hosting guide covers
+                installation, private invitations and a backup you can restore. Friends use the
+                separately published browser app; they do not need to manage a server.
               </p>
               <a
                 class="button"
-                href="https://github.com/Dynobit/clean-bookface/blob/main/docs/HOST_YOUR_CIRCLE.md"
-                >Host a circle · five steps</a
+                href="https://github.com/Dynobit/clean-bookface/blob/main/encrypted-host/SELF_HOST.md"
+                >Set up an encrypted home</a
               >
             </div>
             <p class="small">
               Hosting means looking after a bill, updates and backups. A small server can split that
               cost between friends.
-              <a href="https://github.com/Dynobit/clean-bookface/blob/main/docs/HOSTING.md"
+              <a
+                href="https://github.com/Dynobit/clean-bookface/blob/main/docs/ENCRYPTED_HOSTING.md"
                 >Compare practical options and the full cost breakdown.</a
               >
               Permanent free hosting is not promised.
@@ -313,10 +320,11 @@
             <details>
               <summary>Who can see my download?</summary>
               <p>
-                Other members cannot browse your private archive through the app. The person running
-                your server can read its stored data. This version is not end-to-end encrypted.
-                Choose your host with care, keep your original download, and read
-                <a href="https://github.com/Dynobit/clean-bookface/blob/main/docs/PRIVACY.md"
+                The encrypted app opens memories in your browser. Your storage home gets encrypted
+                copies, but still sees account names, connections and traffic. The app publisher
+                remains trusted: someone who replaces its code can steal keys. Keep your originals
+                and read
+                <a href="https://github.com/Dynobit/clean-bookface/blob/main/docs/ENCRYPTION.md"
                   >the privacy guide</a
                 >.
               </p>
@@ -353,10 +361,10 @@
             <details>
               <summary>Can I take my memories somewhere else?</summary>
               <p>
-                Yes. Download your account from Settings, import it privately into another
-                compatible circle, or delete your account. Friends and sharing permissions do not
-                automatically move. Someone you shared with may have saved a copy; a screenshot
-                cannot be recalled.
+                Yes. Download your saved imports, bring them privately to another home, or close
+                your account in My account. Friends and sharing permissions do not automatically
+                move. Someone you shared with may have saved a copy; a screenshot cannot be
+                recalled.
               </p>
             </details>
           </div>
@@ -370,9 +378,10 @@
               don’t have to write code to make it better.
             </p>
             <p>
-              <strong>Use the preview; help build what comes next.</strong> The released v0.1
-              requires a host you trust. A separate encrypted version is in development, including
-              recovery kits and an optional backup host. It is not ready for personal archives.
+              <strong>Try the encrypted preview with made-up memories.</strong> Importing, verified
+              sharing, comments, reactions, recovery and backups have automated end-to-end checks.
+              Independent human security, accessibility and usability reviews are still open.
+              Existing v0.1 installations are not encrypted or upgraded by this website update.
             </p>
             <p>
               <a
@@ -384,8 +393,9 @@
                 >How to contribute</a
               >
               ·
-              <a href="https://github.com/Dynobit/clean-bookface/pull/4"
-                >Follow the encrypted version</a
+              <a
+                href="https://github.com/Dynobit/clean-bookface/blob/main/encrypted-client/QUALIFICATION.md"
+                >Read the test results</a
               >
             </p>
             <p class="fine-print">
@@ -441,7 +451,7 @@
             </div>
             <div>
               <dt>Release</dt>
-              <dd>v0.1 public preview. No official hosting service.</dd>
+              <dd>Encrypted preview. No official hosting service.</dd>
             </div>
           </dl>
         </section>
@@ -470,7 +480,7 @@
       <nav aria-label="Footer">
         <a href="#terms">Terms of disengagement</a
         ><a href="#independent">Parody &amp; independence</a
-        ><a href="https://github.com/Dynobit/clean-bookface/blob/main/docs/PRIVACY.md">Privacy</a
+        ><a href="https://github.com/Dynobit/clean-bookface/blob/main/docs/ENCRYPTION.md">Privacy</a
         ><a href="https://github.com/Dynobit/clean-bookface/blob/main/SECURITY.md">Security</a
         ><a href="https://github.com/Dynobit/clean-bookface">GitHub</a>
       </nav>

@@ -17,7 +17,16 @@ The generated Synapse config includes `client` and `federation` resources on its
 
 ## HTTPS discovery and routing
 
-This is a technical recipe for a separately reviewed proxy, not an automatic DNS, certificate or service change.
+`operations.py prepare-https` now generates the restricted proxy and discovery responses from the explicit peer configuration:
+
+```sh
+python3 encrypted-host/operations.py prepare-https --runtime /srv/home-a \
+  --client-url https://client.example
+python3 encrypted-host/operations.py validate-https --runtime /srv/home-a
+python3 encrypted-host/host.py start --runtime /srv/home-a
+```
+
+Use the [explicit loopback tunnel mode](SELF_HOST.md#optional-existing-tls-tunnel) when another service terminates public TLS. Preparation refuses mismatches between the recorded peers, Synapse whitelist/listener and client identity. It does not add peers, create DNS records, publish the independent client or qualify a live public route. It serves exactly the discovery response below at the permanent identity hostname and forwards federation/key paths only when the peer list is nonempty. Synapse verifies signed peer identity; the proxy does not treat an untrusted HTTP header or source address as peer authorization.
 
 1. Keep the permanent identity `home-a.example` under the host's control. Serve `https://home-a.example/.well-known/matrix/server` on port 443 with a valid certificate and HTTP 200 JSON:
 
@@ -45,6 +54,6 @@ Requires the cached official ARM64 image digests recorded in `imported-images.js
 
 The fixture tests closed-default federation, an actual rejected remote invite while the receiver's allowlist is empty, then reciprocal allowlisting, invite/join, encryption state, exact opaque `m.room.encrypted` delivery and authenticated remote-media retrieval. Its randomly generated opaque content is intentionally not claimed to be client-encrypted Megolm or media. It writes `qualification.json` privately, including checks and failures. It removes its own containers, volumes and network by default, retaining private runtime evidence. `--keep-running` retains passing fixtures for a separate browser test. To clean up those retained fixtures, run `host.py destroy-local` for each of `RUNTIME/a` and `RUNTIME/b`, then remove the exact network recorded in `RUNTIME/fixture-network.json`. Do not use these test identities or private CA for members.
 
-The fixture uses verified TLS on the standard federation port 8448, Docker-only DNS aliases and direct server discovery. It does not exercise the production `/.well-known/matrix/server` delegation/proxy recipe, public DNS, certificate renewal, independent failure domains or production network admission. Those remain deployment checks.
+By default the fixture uses verified TLS on port 8448 and direct server discovery. Add `--https-proxy` to exercise the generated Caddy proxy, verified HTTPS `/.well-known/matrix/server` delegation to a separate storage hostname on 443, and the same signed invite/join/event/media flow through that proxy. Docker-only DNS aliases and a private fixture CA remain isolated to these containers. Public DNS, ACME issuance/renewal, independent failure domains and production network admission remain separate deployment checks.
 
 References: [Synapse federation configuration](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#federation_domain_whitelist), [reverse proxy](https://element-hq.github.io/synapse/latest/reverse_proxy.html), [delegation](https://element-hq.github.io/synapse/latest/delegate.html).

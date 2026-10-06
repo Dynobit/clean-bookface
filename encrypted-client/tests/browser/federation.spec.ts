@@ -196,7 +196,7 @@ test('independent homes share only selected memories after a real identity compa
   for (const page of [a, b]) {
     await page.getByRole('button', { name: 'My account', exact: true }).click();
     await page.getByRole('button', { name: 'Sign out of this browser', exact: true }).click();
-    await expect(page.locator('#notice')).toHaveText('Signed out.', { timeout: 65_000 });
+    await expect(page.locator('#notice')).toContainText('Signed out.', { timeout: 65_000 });
     await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
   }
   await ca.close();

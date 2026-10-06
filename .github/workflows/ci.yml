@@ -17,14 +17,58 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: encrypted-client/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            encrypted-client/package-lock.json
+      - run: npm ci --ignore-scripts
       - run: npm ci --ignore-scripts
         working-directory: encrypted-client
       - run: npm run check && npm test && npm run build
         working-directory: encrypted-client
+      - name: Verify actual legacy HTTP export migration
+        run: npx --no-install tsx --test tests/legacy-import.integration.ts
+        working-directory: encrypted-client
       - run: npm audit --omit=dev --audit-level=moderate
         working-directory: encrypted-client
       - run: python3 -m unittest discover -s encrypted-host -p 'test_*.py'
+  encrypted-browser:
+    needs: encrypted-client
+    # Official standard ARM64 runner; matches the reviewed encrypted-host image digests.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        suite:
+          [journey, concurrent-import, migration, social-lifecycle, local-cleanup, large-import]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            encrypted-client/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts
+        working-directory: encrypted-client
+      - run: npx --no-install playwright install --with-deps chromium
+        working-directory: encrypted-client
+      - name: Qualify one isolated encrypted browser suite
+        env:
+          BROWSER_SUITE: ${{ matrix.suite }}
+        run: node scripts/encrypted-browser-ci.mjs --suite "$BROWSER_SUITE" --work "$RUNNER_TEMP/clean-bookface-$BROWSER_SUITE"
+      - name: Remove this job's disposable host even after failure
+        if: always()
+        env:
+          BROWSER_SUITE: ${{ matrix.suite }}
+        run: node scripts/encrypted-browser-ci.mjs --cleanup --work "$RUNNER_TEMP/clean-bookface-$BROWSER_SUITE"
+      # No artifact upload: generated credentials, recovery kits and error contexts stay private.
+      # Federation and restored-standby journeys retain their separate external qualification.
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -1,5 +1,7 @@
 # Clean Bookface hosting choices and costs
 
+> This page describes the older **v0.1 application**. For the encrypted version, use the [member guide](ENCRYPTED_GETTING_STARTED.md), [hosting guide](../encrypted-host/SELF_HOST.md) and [encryption contract](ENCRYPTION.md). The two versions have different privacy and hosting requirements.
+
 You should not have to become a server administrator to see your friends' photos. Clean Bookface should offer three clear choices: join someone you trust, share the cost of a small server, or pay a little more for a hosting dashboard that handles the operating system.
 
 **This is a cost guide for an unreleased application.** A working Docker Compose recipe, Render Blueprint, Railway IaC definition and first-account setup screen are included; start with [Host your circle](HOST_YOUR_CIRCLE.md), or use the [installation reference](INSTALL.md). Managed templates have local structural checks, not fresh-provider deployment qualification. The native synthetic import benchmark in [Performance](PERFORMANCE.md) does not qualify any provider below. There is no official hosted service or existing public network. Backups still require operator configuration, secret custody and a tested schedule. Prices were checked against provider sources on **2 October 2026**; checkout prices, availability, taxes, and measured application requirements decide the final bill. No hosting has been purchased, and these links contain no referral codes.

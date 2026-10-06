@@ -1,5 +1,7 @@
 # Install a circle
 
+> This page describes the older **v0.1 application**. For the encrypted version, use the [member guide](ENCRYPTED_GETTING_STARTED.md), [hosting guide](../encrypted-host/SELF_HOST.md) and [encryption contract](ENCRYPTION.md). The two versions have different privacy and hosting requirements.
+
 **First time hosting? Start with [Host your own circle](HOST_YOUR_CIRCLE.md).** It walks through choosing a server, running `./setup`, creating your account and checking backups. This page is the detailed reference for manual installation and maintenance.
 
 A member needs only a browser and an invitation. The instructions here are for the person responsible for the host, its bill, updates and backups. Start with synthetic data; finish a restore drill before asking friends to import their memories.

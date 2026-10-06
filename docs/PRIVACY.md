@@ -1,5 +1,7 @@
 # Privacy contract for Clean Bookface v1
 
+> This page describes the older **v0.1 application**. For the encrypted version, use the [member guide](ENCRYPTED_GETTING_STARTED.md), [hosting guide](../encrypted-host/SELF_HOST.md) and [encryption contract](ENCRYPTION.md). The two versions have different privacy and hosting requirements.
+
 **Status, 2026-10-02: implemented privacy contract with automated evidence; public production qualification and independent review remain open.**
 
 Clean Bookface is a self-hosted private archive and invitation-based social app. Its default is to keep imported material private. Publishing creates an intentional, separate copy for a defined audience. The implementation is one TypeScript/Node 24 service using Hono, SQLite, private local media storage, and Fedify HTTP signatures; no Redis or central account service is required. The requirements below remain release acceptance checks, including cases not established by the current test suite.

@@ -131,6 +131,34 @@ with recovery.termination_cleanup(), recovery.operation_lock(root):
             self.assertEqual(ready.called,running and not leave_stopped)
         return calls
 
+    def test_capture_keeps_exact_decision_receipts_and_excludes_external_reason(self):
+        runtime=self.root/'runtime';runtime.mkdir()
+        receipt=runtime/'moderation-decision-0123456789abcdef.json'
+        host.write(receipt, {'status':'verified','reason':'synthetic decision'})
+        host.write(runtime/'moderation-decision-unrelated.json', {'not':'a tool receipt'})
+        host.write(self.root/'external-reason.txt', 'not part of runtime snapshot')
+        stage=self.root/'stage';stage.mkdir()
+        def compose(_state,*args,**kwargs):
+            return subprocess.CompletedProcess([],0,stdout='synapse\n' if args[0]=='ps' else '')
+        with patch.object(recovery,'compose',side_effect=compose), patch.object(recovery,'ready'):
+            recovery.capture_snapshot({'runtime':runtime},stage)
+        self.assertEqual((stage/'payload'/receipt.name).read_bytes(),receipt.read_bytes())
+        self.assertFalse((stage/'payload/moderation-decision-unrelated.json').exists())
+        self.assertFalse((stage/'payload/external-reason.txt').exists())
+
+    def test_receipt_symlink_is_rejected_and_primary_resumes(self):
+        runtime=self.root/'runtime';runtime.mkdir()
+        external=self.root/'external-reason.txt';external.write_text('outside receipt')
+        (runtime/'moderation-decision-0123456789abcdef.json').symlink_to(external)
+        stage=self.root/'stage';stage.mkdir();calls=[]
+        def compose(_state,*args,**kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess([],0,stdout='synapse\n' if args[0]=='ps' else '')
+        with patch.object(recovery,'compose',side_effect=compose), patch.object(recovery,'ready'):
+            with self.assertRaisesRegex(RuntimeError,'regular runtime files'):
+                recovery.capture_snapshot({'runtime':runtime},stage)
+        self.assertEqual(calls[-1],('start','synapse'))
+
     def test_failure_resumes_previously_running_primary(self):
         calls=self.capture_failure(True)
         self.assertEqual(calls[-1],('start','synapse'))

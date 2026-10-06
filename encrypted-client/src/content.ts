@@ -1,8 +1,17 @@
+import { isBlocked } from './lifecycle';
 import { type MatrixClient, type MatrixEvent, type Room, Preset, ClientEvent } from 'matrix-js-sdk';
 import { AllDevicesIsolationMode } from 'matrix-js-sdk/lib/crypto-api/index.js';
 import { Attachment, EncryptedAttachment, initAsync } from '@matrix-org/matrix-sdk-crypto-wasm';
 import { enforceRecipientBoundary } from './recipient-boundary.js';
 import { signContent, verifyContent, type SignedContent } from './signed-content.js';
+import {
+  parseSocial,
+  socialState,
+  type SocialPayload,
+  type SocialAction,
+  type SocialEvent,
+  type SocialState,
+} from './social.js';
 import { ARCHIVE_LIMITS, exportArchives, importArchives, type MemoryRecord } from './archive.js';
 
 export interface ArchiveConflict {
@@ -28,7 +37,17 @@ export interface ArchiveBatchPage {
   batches: ArchiveBatch[];
   nextCursor?: string;
 }
+export interface ArchiveSearchHit {
+  roomId: string;
+  eventId: string;
+  recordId: string;
+  title: string;
+  excerpt: string;
+}
 export interface SharedPost {
+  eventId: string;
+  comments: SocialState['comments'];
+  reactions: SocialState['reactions'];
   id: string;
   roomId: string;
   sender: string;
@@ -265,6 +284,7 @@ async function sharedCopy(record: MemoryRecord): Promise<MemoryRecord> {
 }
 
 export class ContentStore {
+  private verifiedSocial = new WeakMap<MatrixEvent, SocialPayload>();
   private verifiedPayloads = new WeakMap<MatrixEvent, Payload>();
   private revoked = new Set<string>();
   private conflicts: ArchiveConflict[] = [];
@@ -354,7 +374,8 @@ export class ContentStore {
             throw new Error('Unexpected room membership');
           if (expected.some((user) => !members.some((m) => m.userId === user))) return;
           // A deliberate new invitation may replace a revoked friendship, but
-          // only inviteFriend clears the revocation after this full-state proof.
+          // only an explicit invitation or acceptance clears revocation after
+          // the complete state has passed these checks.
           this.check(room, peer, true);
           finish();
         })()
@@ -383,6 +404,7 @@ export class ContentStore {
   }
   private check(r: Room, peer?: string, allowRevoked = false): void {
     this.crypto();
+    if (peer && isBlocked(this.client, peer)) throw new Error('Friend is blocked');
     if (
       r.currentState.getStateEvents('m.room.encryption', '')?.getContent().algorithm !== ALGORITHM
     )
@@ -448,7 +470,12 @@ export class ContentStore {
       const other = r
         .getMembers()
         .filter((m) => m.userId !== this.own() && ['join', 'invite'].includes(m.membership ?? ''));
-      if (other.length !== 1 || this.revoked.has(other[0].userId)) continue;
+      if (
+        other.length !== 1 ||
+        this.revoked.has(other[0].userId) ||
+        isBlocked(this.client, other[0].userId)
+      )
+        continue;
       try {
         this.check(r, other[0].userId);
         out.push({ roomId: r.roomId, userId: other[0].userId });
@@ -483,6 +510,7 @@ export class ContentStore {
     return response.room_id;
   }
   async inviteFriend(userId: string): Promise<string> {
+    if (isBlocked(this.client, userId)) throw new Error('Friend is blocked');
     if (!/^@[^\s:]+:[^\s]+$/u.test(userId) || userId === this.own())
       throw new Error('Enter another Matrix user ID');
     const old = this.friendRooms().find((r) => r.userId === userId);
@@ -497,6 +525,7 @@ export class ContentStore {
       .getMembers()
       .filter((m) => m.userId !== this.own() && ['join', 'invite'].includes(m.membership ?? ''));
     if (peers.length !== 1) throw new Error('Invitation must have exactly one peer');
+    if (isBlocked(this.client, peers[0].userId)) throw new Error('Friend is blocked');
     this.crypto();
     if (r.getMyMembership() !== 'invite' || peers[0].membership !== 'join')
       throw new Error('Expected an invitation from one joined peer');
@@ -512,14 +541,25 @@ export class ContentStore {
       await this.waitForJoinedRoom(roomId, peers[0].userId);
       const joined = this.room(roomId);
       await joined.loadMembersIfNeeded();
-      this.check(joined, peers[0].userId);
+      this.check(joined, peers[0].userId, true);
+      // Accepting a fresh invitation deliberately restores this friendship.
+      // Keep revocation in place until the full membership and encryption
+      // policy have passed; check() still rejects persistent blocks.
+      this.revoked.delete(peers[0].userId);
     } catch (e) {
       await this.client.leave(roomId);
       throw e;
     }
   }
   async revokeFriend(userId: string): Promise<void> {
-    const rooms = this.friendRooms().filter((r) => r.userId === userId);
+    const rooms = this.client
+      .getRooms()
+      .filter(
+        (r) =>
+          this.purpose(r) === 'pair' &&
+          r.getMyMembership() === 'join' &&
+          r.getMembers().some((m) => m.userId === userId),
+      );
     this.revoked.add(userId);
     for (const r of rooms) await this.client.leave(r.roomId);
   }
@@ -610,6 +650,9 @@ export class ContentStore {
     return { batches };
   }
   async downloadArchiveBatch(roomId: string, eventId: string): Promise<Blob> {
+    return exportArchives(await this.readArchiveBatch(roomId, eventId));
+  }
+  async readArchiveBatch(roomId: string, eventId: string): Promise<MemoryRecord[]> {
     if (!this.archiveRooms().some((room) => room.roomId === roomId))
       throw new Error('Archive room is not available');
     let event: MatrixEvent | undefined;
@@ -622,7 +665,57 @@ export class ContentStore {
     if (!event) throw new Error('Archive batch is not available');
     const p = this.verifiedPayloads.get(event)!;
     if (p.purpose !== 'archive') throw new Error('Unexpected archive payload');
-    return exportArchives(await this.download(p));
+    return this.download(p);
+  }
+  /** Search one authenticated saved part at a time; retain small excerpts, never all media. */
+  async searchArchive(
+    query: string,
+    limit = 50,
+    onProgress?: (parts: number) => void,
+    signal?: AbortSignal,
+  ): Promise<{ matches: ArchiveSearchHit[]; partsChecked: number; limited: boolean }> {
+    const term = query.trim().toLocaleLowerCase();
+    if (
+      term.length < 2 ||
+      term.length > 200 ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    )
+      throw new Error('Search for 2–200 characters, with at most 100 results.');
+    const matches: ArchiveSearchHit[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined,
+      partsChecked = 0;
+    do {
+      signal?.throwIfAborted();
+      const page = await this.archiveBatches(cursor);
+      for (const batch of page.batches) {
+        if (seen.has(batch.id)) continue;
+        seen.add(batch.id);
+        signal?.throwIfAborted();
+        const rows = await this.readArchiveBatch(batch.roomId, batch.eventId);
+        for (const row of rows) {
+          const value = `${row.title}\n${row.text}`,
+            at = value.toLocaleLowerCase().indexOf(term);
+          if (at < 0) continue;
+          if (matches.length === limit) return { matches, partsChecked, limited: true };
+          matches.push({
+            roomId: batch.roomId,
+            eventId: batch.eventId,
+            recordId: row.id,
+            title: row.title.slice(0, 160),
+            excerpt: value.slice(Math.max(0, at - 40), at + 200),
+          });
+        }
+        partsChecked++;
+        onProgress?.(partsChecked);
+      }
+      if (page.nextCursor && page.nextCursor === cursor)
+        throw new Error('Archive search made no progress. Refresh and retry.');
+      cursor = page.nextCursor;
+    } while (cursor);
+    return { matches, partsChecked, limited: false };
   }
   private async upload(records: MemoryRecord[], purpose: Payload['purpose']): Promise<Payload> {
     const id = await identity(records),
@@ -778,6 +871,27 @@ export class ContentStore {
     const p = await this.upload(records, 'archive');
     await this.send(id, p);
   }
+  /**
+   * Add one bounded part of a large archive. Existing parts are authenticated without
+   * downloading their media. The UI must expose partial progress and saved-part browsing.
+   */
+  async appendArchiveBatch(records: MemoryRecord[]): Promise<{ id: string; stored: boolean }> {
+    if (!records.length || records.length > ARCHIVE_LIMITS.maxRecords)
+      throw new Error('Choose a nonempty, bounded archive part.');
+    const batchId = await identity(records);
+    const roomId = (await this.archiveRoom(true))!;
+    for (const room of this.archiveRooms()) {
+      for (const event of await this.events(room.roomId)) {
+        const existing = this.verifiedPayloads.get(event);
+        if (!existing || existing.purpose !== 'archive')
+          throw new Error('Unexpected private archive content.');
+        if (existing.id === batchId) return { id: batchId, stored: false };
+      }
+    }
+    const p = await this.upload(records, 'archive');
+    await this.send(roomId, p);
+    return { id: p.id, stored: true };
+  }
   async share(record: MemoryRecord, recipientIds: string[]): Promise<void> {
     const recipients = [...new Set(recipientIds)];
     if (!recipients.length || recipients.length > 100) throw new Error('Choose 1–100 friends');
@@ -789,6 +903,81 @@ export class ContentStore {
     for (const r of rooms) await this.guard(r.roomId, r.userId);
     const p = await this.upload([await sharedCopy(record)], 'post');
     for (const r of rooms) await this.send(r.roomId, p, r.userId);
+  }
+  /** Retain operationId for retries. Each room is a separate conversation. */
+  private async social(
+    post: Pick<SharedPost, 'roomId' | 'id' | 'sender'>,
+    action: SocialAction,
+    operationId: string,
+  ): Promise<void> {
+    const peer = this.friendRooms().find((r) => r.roomId === post.roomId)?.userId;
+    if (!peer) throw new Error('Verified friendship required');
+    const events = await this.events(post.roomId, peer);
+    if (
+      !events.some(
+        (e) =>
+          this.verifiedPayloads.get(e)?.purpose === 'post' &&
+          this.verifiedPayloads.get(e)?.id === post.id &&
+          e.getSender() === post.sender,
+      )
+    )
+      throw new Error('Post is not available in this conversation');
+    const p = parseSocial({
+      version: 1,
+      purpose: 'social',
+      id: operationId,
+      postId: post.id,
+      postSender: post.sender,
+      ...action,
+    });
+    const history = events
+      .filter((e) => this.verifiedSocial.has(e))
+      .map((e) => ({
+        payload: this.verifiedSocial.get(e)!,
+        sender: e.getSender()!,
+        timestamp: e.getTs(),
+      }))
+      .filter((e) => e.payload.postId === post.id && e.payload.postSender === post.sender);
+    const before = socialState(post, history);
+    const retry = history.some((e) => e.sender === this.own() && e.payload.id === operationId);
+    if (before.removed && !retry) throw new Error('Post has been removed');
+    socialState(post, [...history, { payload: p, sender: this.own(), timestamp: Date.now() }]);
+    const signed = await signContent(
+      this.client,
+      this.requireVerifiedUser,
+      post.roomId,
+      p as unknown as Record<string, unknown>,
+    );
+    const txn = await sha(`${this.own()}\0${post.roomId}\0social\0${operationId}`);
+    await this.guard(post.roomId, peer);
+    await this.client.sendEvent(post.roomId, EVENT, signed, txn);
+  }
+  async addComment(
+    post: Pick<SharedPost, 'roomId' | 'id' | 'sender'>,
+    text: string,
+    operationId: string,
+  ): Promise<void> {
+    await this.social(post, { kind: 'comment', text }, operationId);
+  }
+  async removeComment(
+    post: Pick<SharedPost, 'roomId' | 'id' | 'sender'>,
+    commentId: string,
+    operationId: string,
+  ): Promise<void> {
+    await this.social(post, { kind: 'remove-comment', commentId }, operationId);
+  }
+  async setReaction(
+    post: Pick<SharedPost, 'roomId' | 'id' | 'sender'>,
+    reaction: string | null,
+    operationId: string,
+  ): Promise<void> {
+    await this.social(post, { kind: 'reaction', reaction }, operationId);
+  }
+  async removePost(
+    post: Pick<SharedPost, 'roomId' | 'id' | 'sender'>,
+    operationId: string,
+  ): Promise<void> {
+    await this.social(post, { kind: 'remove-post' }, operationId);
   }
   private async trusted(event: MatrixEvent, roomId: string): Promise<void> {
     if (!event.isEncrypted()) throw new Error('Plaintext content refused');
@@ -817,7 +1006,8 @@ export class ContentStore {
       sender,
       event.getContent(),
     );
-    this.verifiedPayloads.set(event, payload(content));
+    if (content.purpose === 'social') this.verifiedSocial.set(event, parseSocial(content));
+    else this.verifiedPayloads.set(event, payload(content));
   }
   private async downloadPart(file: FileDescriptor): Promise<Uint8Array<ArrayBuffer>> {
     const url = this.client.mxcUrlToHttp(
@@ -953,6 +1143,8 @@ export class ContentStore {
       if (![this.own(), peer].includes(event.getSender()))
         throw new Error('Unexpected content sender');
       await this.trusted(event, id);
+      if (!peer && this.verifiedSocial.has(event))
+        throw new Error('Social content in private archive');
       const suspendedAt = Date.now();
       yield event;
       deadline += Date.now() - suspendedAt;
@@ -1097,7 +1289,6 @@ export class ContentStore {
   }
   async posts(): Promise<SharedPost[]> {
     const result: SharedPost[] = [];
-    const seen = new Set<string>();
     this.locked = [];
     const rooms = this.client
       .getRooms()
@@ -1106,7 +1297,7 @@ export class ContentStore {
         const peer = r
           .getMembers()
           .find((m) => m.userId !== this.own() && ['join', 'invite'].includes(m.membership ?? ''));
-        return peer && !this.revoked.has(peer.userId)
+        return peer && !this.revoked.has(peer.userId) && !isBlocked(this.client, peer.userId)
           ? [{ roomId: r.roomId, userId: peer.userId }]
           : [];
       });
@@ -1114,11 +1305,20 @@ export class ContentStore {
       try {
         const roomPosts: SharedPost[] = [];
         const roomSeen = new Set<string>();
-        for (const event of await this.events(room.roomId, room.userId)) {
+        const events = await this.events(room.roomId, room.userId);
+        const social: SocialEvent[] = events
+          .filter((e) => this.verifiedSocial.has(e))
+          .map((e) => ({
+            payload: this.verifiedSocial.get(e)!,
+            sender: e.getSender()!,
+            timestamp: e.getTs(),
+          }));
+        for (const event of events) {
+          if (this.verifiedSocial.has(event)) continue;
           const p = this.verifiedPayloads.get(event)!;
           if (p.purpose !== 'post') throw new Error('Unexpected shared payload');
           const key = `${event.getSender()}:${p.id}`;
-          if (seen.has(key) || roomSeen.has(key)) continue;
+          if (roomSeen.has(key)) continue;
           const records = await this.download(p);
           const r = records[0];
           if (
@@ -1134,7 +1334,18 @@ export class ContentStore {
           )
             throw new Error('Invalid shared copy');
           roomSeen.add(key);
+          const conversation = socialState(
+            { id: p.id, sender: event.getSender()! },
+            social.filter(
+              (e) => e.payload.postId === p.id && e.payload.postSender === event.getSender(),
+            ),
+          );
+          if (conversation.removed) continue;
+          if (!event.getId()) throw new Error('Post event identity unavailable');
           roomPosts.push({
+            eventId: event.getId()!,
+            comments: conversation.comments,
+            reactions: conversation.reactions,
             id: p.id,
             roomId: room.roomId,
             sender: event.getSender()!,
@@ -1142,13 +1353,16 @@ export class ContentStore {
             record: r,
           });
         }
+        if (social.some((e) => !roomSeen.has(`${e.payload.postSender}:${e.payload.postId}`)))
+          throw new Error('Social action references an unknown post');
         result.push(...roomPosts);
-        for (const key of roomSeen) seen.add(key);
-      } catch {
+      } catch (error) {
         this.locked.push({
           ...room,
           reason:
-            'Check this friend’s identity to open this room. If already checked, its encrypted content or room permissions could not be verified.',
+            error instanceof Error && error.message === 'Encrypted history is unavailable'
+              ? 'Some history has no usable decryption key. Recover with your saved kit or a surviving device. Comparing identities again cannot replace a missing key.'
+              : 'Check this friend’s identity in Friends. If already checked, the content or room permissions could not be verified.',
         });
       }
     }

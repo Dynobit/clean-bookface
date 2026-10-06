@@ -9,7 +9,7 @@ The beginner walkthrough is available directly on the page, with prominent
 GitHub links and separate joining and hosting instructions. Hosting providers can still receive connection information.
 
 The owner approved public source and website publication on 5 October 2026.
-The page uses v0.1 public-preview copy. Building it locally does not publish it,
+The current source uses encrypted-preview copy and labels the older v0.1 application separately. Building it locally does not publish it,
 configure DNS or change repository visibility. Public source access is verified.
 The initial Cloudflare Pages Free publication served seven reviewed assets from
 `46838a8`; all returned HTTP 200 and matched their approved hashes. Both `.org` custom domains
@@ -18,10 +18,7 @@ in 301 redirects. Delivered HTML contains no scripts after explicitly disabling
 zone RUM. See [Release status](RELEASE.md) for browser-check scope. Publication
 does not open pilot invitations or promise an official member-hosting service.
 
-The current page keeps the v0.1 screenshots and includes a community starting
-point, a link to the separate encrypted draft and share-preview metadata using
-the existing fictional cover image. Keep its release distinction and the
-README's distinction in sync: the encrypted draft is not a released upgrade.
+The current source shows actual encrypted-app screenshots with fictional accounts, links to the member guide and independent browser client, and retains the existing fictional cover image. Keep website and README privacy statements aligned. A website update never upgrades or encrypts an existing v0.1 installation. The separately deployed client uses `app.cleanbookface.org`; it does not supply a public account-hosting service.
 
 ## Preview locally
 
@@ -60,8 +57,8 @@ publish the website.
    - `favicon.svg`
    - `assets/album-mark.svg`
    - `assets/cover-weekend.png`
-   - `assets/feed-desktop.png`
-   - `assets/feed-mobile.png`
+   - `assets/encrypted-feed-desktop.png`
+   - `assets/encrypted-feed-mobile.png`
 2. Exclude `CNAME` and `.nojekyll`: the builder writes them for GitHub Pages
    compatibility. Never upload the repository, archives, credentials, private
    configuration or application data. Record the source revision and SHA-256

@@ -15,6 +15,7 @@ import subprocess
 import time
 import urllib.request
 import host
+import operations
 
 
 def persist_fixture_network(runtime, network, identity, address):
@@ -33,6 +34,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=pathlib.Path, required=True)
     parser.add_argument('--port', type=int, default=18030)
+    parser.add_argument('--https-proxy', action='store_true', help='Exercise generated Caddy federation routes and HTTPS well-known delegation')
     parser.add_argument('--keep-running', action='store_true', help='Retain only these disposable homes for browser qualification')
     args = parser.parse_args()
     root = args.runtime.resolve()
@@ -54,10 +56,10 @@ def main():
         print('PASS:', label, flush=True)
     try:
         # Fresh CA and two leaf certificates never leave this private fixture directory.
-        run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(root/'ca.key'),'-out',str(root/'ca.pem'),'-days','2','-subj','/CN=Disposable federation fixture CA'])
+        run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(root/'ca.key'),'-out',str(root/'ca.pem'),'-days','2','-subj','/CN=Disposable federation fixture CA','-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign'])
         for name in ['a','b']:
             run(['openssl','req','-newkey','rsa:2048','-nodes','-keyout',str(root/(name+'.key')),'-out',str(root/(name+'.csr')),'-subj','/CN='+identities[name]])
-            host.write(root/(name+'.ext'), 'subjectAltName=DNS:'+identities[name]+'\nextendedKeyUsage=serverAuth\n')
+            host.write(root/(name+'.ext'), 'subjectAltName=DNS:'+identities[name]+(',DNS:matrix.'+identities[name] if args.https_proxy else '')+'\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n')
             run(['openssl','x509','-req','-in',str(root/(name+'.csr')),'-CA',str(root/'ca.pem'),'-CAkey',str(root/'ca.key'),'-CAcreateserial','-out',str(root/(name+'.pem')),'-days','2','-extfile',str(root/(name+'.ext'))])
         run(['docker','network','create','--internal',network]); network_created = True
         for i, name in enumerate(['a','b']):
@@ -78,20 +80,42 @@ def main():
         run(['docker','network','create','--internal','--subnet',subnet,network])
         ips=[str(ipaddress.ip_network(subnet)[i]) for i in [2,3]]
         for i,(name,state) in enumerate(zip(['a','b'],states)):
-            persist_fixture_network(state['runtime'],network,identities[name],ips[i])
+            persist_fixture_network(state['runtime'],network,'backend-'+name if args.https_proxy else identities[name],ips[i])
             host.compose(state,'up','-d','synapse'); host.ready(state)
         for i,(name,state) in enumerate(zip(['a','b'],states)):
             data=state['runtime']/'synapse'
             for src,dst in [(root/'ca.pem',data/'fixture-ca.pem'),(root/(name+'.pem'),data/'fixture-cert.pem'),(root/(name+'.key'),data/'fixture-key.pem')]:
                 host.write(dst,src.read_text())
             config=json.loads((data/'homeserver.yaml').read_text())
-            config['listeners'].append({'port':8448,'tls':True,'type':'http','resources':[{'names':['federation'],'compress':False}]})
+            if args.https_proxy:
+                config['listeners'][0]['resources'][0]['names']=['client','federation']
+                config['listeners'][0]['x_forwarded']=True
+            else:
+                config['listeners'].append({'port':8448,'tls':True,'type':'http','resources':[{'names':['federation'],'compress':False}]})
             config.update(tls_certificate_path='/data/fixture-cert.pem',tls_private_key_path='/data/fixture-key.pem',federation_custom_ca_list=['/data/fixture-ca.pem'])
             # Exact private peer address exception ONLY in this disposable fixture.
             # Keep all default blocklists and TLS verification in force.
-            config['ip_range_whitelist']=[ips[1-i]+'/32']
+            config['ip_range_whitelist']=[(str(ipaddress.ip_network(subnet)[5-i]) if args.https_proxy else ips[1-i])+'/32']
             # B starts with its closed allowlist, despite the TLS test listener.
             host.write(data/'homeserver.yaml',config)
+            if args.https_proxy:
+                peer=identities['b' if name=='a' else 'a']
+                # Expose the test transport on B while its empty Synapse policy
+                # rejects A; after opt-in the same generated routes carry traffic.
+                proxy=operations.proxy_config('https://matrix.'+identities[name],identities[name],[peer])
+                for hostname in [identities[name],'matrix.'+identities[name]]:
+                    proxy=proxy.replace('https://'+hostname+' {','https://'+hostname+' {\n    tls /fixture/cert.pem /fixture/key.pem')
+                proxy=proxy.replace('synapse:8008','backend-'+name+':8008')
+                directory=state['runtime']/'proxy';directory.mkdir(mode=0o700)
+                host.write(directory/'Caddyfile',proxy)
+                host.write(directory/'cert.pem',(root/(name+'.pem')).read_text())
+                host.write(directory/'key.pem',(root/(name+'.key')).read_text())
+                spec=json.loads((state['runtime']/'compose.json').read_text())
+                spec['services']['https']={'image':operations.CADDY,'restart':'no','volumes':[str(directory)+':/fixture:ro'],
+                    'command':['caddy','run','--config','/fixture/Caddyfile','--adapter','caddyfile'],
+                    'networks':{'federation_fixture':{'aliases':[identities[name],'matrix.'+identities[name]],'ipv4_address':str(ipaddress.ip_network(subnet)[4+i])}}}
+                host.write(state['runtime']/'compose.json',spec)
+                host.compose(state,'up','-d','https')
             host.compose(state,'restart','synapse'); host.ready(state)
         for state in states:
             host.compose(state,'down')
@@ -99,9 +123,15 @@ def main():
         for i,(name,state) in enumerate(zip(['a','b'],states)):
             cid=run(['docker','compose','-p',state['project'],'-f',str(state['runtime']/'compose.json'),'ps','-q','synapse'])
             attached=json.loads(run(['docker','inspect',cid]))[0]['NetworkSettings']['Networks'][network]
-            if attached['IPAddress'] != ips[i] or identities[name] not in attached['Aliases']:
+            if attached['IPAddress'] != ips[i] or ('backend-'+name if args.https_proxy else identities[name]) not in attached['Aliases']:
                 raise AssertionError('Recreated federation topology changed')
         check(True,'Compose down/up recreated both homes with persistent federation topology')
+        if args.https_proxy:
+            for name,state in zip(['a','b'],states):
+                peer=identities['b' if name=='a' else 'a']
+                script='import urllib.request,ssl,json; c=ssl.create_default_context(cafile="/data/fixture-ca.pem"); print(urllib.request.urlopen("https://'+peer+'/.well-known/matrix/server",context=c).read().decode())'
+                result=host.compose(state,'exec','-T','synapse','python','-c',script,capture_output=True,text=True)
+                check(json.loads(result.stdout)=={'m.server':'matrix.'+peer+':443'},'Verified peer HTTPS well-known delegates to generated proxy on 443')
         accounts=[json.loads((s['runtime']/'fictional-credentials.json').read_text())[0] for s in states]
         tokens=[host.login(s,u['username'],u['password']) for s,u in zip(states,accounts)]
         code,room=host.request(a,'/_matrix/client/v3/createRoom',{'preset':'private_chat','initial_state':[{'type':'m.room.encryption','state_key':'','content':{'algorithm':'m.megolm.v1.aes-sha2'}}]},tokens[0])
@@ -148,10 +178,16 @@ def main():
         check(relayed==blob,'opaque attachment fetched through second home using authenticated federation media')
         proof['mediaSha256']=hashlib.sha256(blob).hexdigest()
         proof['homes']=[{'identity':identities[n],'url':s['url']} for n,s in zip(['a','b'],states)]
-        proof['limits']=['Random ciphertext protocol fixture, not valid client-encrypted Megolm or attachment data','No browser identity verification, key exchange, decryption or recovery qualification','Same-machine Docker TLS test; no production DNS, HTTPS proxy, firewall or offsite availability qualification']
+        proof['httpsProxyAndDelegation']=args.https_proxy
+        proof['limits']=['Random ciphertext protocol fixture, not valid client-encrypted Megolm or attachment data','No browser identity verification, key exchange, decryption or recovery qualification','Same-machine Docker TLS test; no public DNS, ACME, production firewall or offsite availability qualification']
         passed=True
     except Exception as exc:
         proof['failure']=type(exc).__name__+': '+str(exc)
+        if isinstance(exc, subprocess.CalledProcessError):
+            proof['commandStderr']=exc.stderr
+        for state in states:
+            logs=host.compose(state,'logs','--no-color','--tail','30',capture_output=True,text=True)
+            host.write(root/(state['runtime'].name+'-failure.log'),logs.stdout+logs.stderr)
         raise
     finally:
         proof['passed']=passed

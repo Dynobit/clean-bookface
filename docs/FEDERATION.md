@@ -1,5 +1,7 @@
 # Private sharing between circles
 
+> This page describes the older **v0.1 application**. For the encrypted version, use the [member guide](ENCRYPTED_GETTING_STARTED.md), [hosting guide](../encrypted-host/SELF_HOST.md) and [encryption contract](ENCRYPTION.md). The two versions have different privacy and hosting requirements.
+
 Clean Bookface connects people who deliberately exchange a profile link or enable handle lookup. There is no global feed, public follower list, relay, contact upload, or shared inbox. A person on your friend's server gets no access just by being on that server.
 
 Federation is optional. Set `FEDERATION_ENABLED=true` only with a stable HTTPS origin on port 443 and after reading the [privacy contract](PRIVACY.md). A restored installation keeps sharing off until deletion and revocation state has been reconciled. Turning federation on does not publish an imported archive.

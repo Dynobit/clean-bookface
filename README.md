@@ -8,39 +8,39 @@ A social network should tell you how your friends are doing. It shouldn't need t
 
 Clean Bookface is a small, self-hosted social network with the feel of early Facebook: a blue bar, photos, comments and friends' posts in order. It can also give your Facebook download a home. Your old memories stay private until you choose to share them.
 
-**[Join a friend](docs/GETTING_STARTED.md#3-join-a-circle-you-trust)** · **[Bring your memories](docs/GETTING_STARTED.md)** · **[Host your own circle](docs/HOST_YOUR_CIRCLE.md)** · **[Help build it](CONTRIBUTING.md)**
+**[Join a friend](docs/ENCRYPTED_GETTING_STARTED.md#join-someone-you-know)** · **[Bring your memories](docs/ENCRYPTED_GETTING_STARTED.md#bring-your-facebook-download)** · **[Host your own circle](encrypted-host/SELF_HOST.md)** · **[Help build it](CONTRIBUTING.md)**
 
-_v0.1 public preview · Free software for small circles. There is no official hosting service or public sign-up. Independent human security, accessibility and usability reviews remain open. [Release status](docs/RELEASE.md)._
+_Encrypted preview · Free software for small circles. There is no official hosting service or public sign-up. Independent human security, accessibility and usability reviews remain open; use fictional memories while those checks are unfinished. [What has been tested](encrypted-client/QUALIFICATION.md)._
 
-![Clean Bookface on desktop: blue navigation, a short friends list and a chronological feed](docs/images/feed-desktop.png)
+![Clean Bookface on desktop: blue navigation, a short friends list and a chronological feed](docs/images/encrypted-feed-desktop.png)
 
-The v0.1 app, with fictional people and posts. These are screenshots of working software.
+The encrypted app, with fictional accounts and posts. These are screenshots of working software, including a verified conversation, reaction and comment.
 
 <details>
 <summary>See it on a phone</summary>
 
-<img src="docs/images/feed-mobile.png" width="390" alt="Clean Bookface on a phone, with compact navigation and friends' posts">
+<img src="docs/images/encrypted-feed-mobile.png" width="390" alt="Clean Bookface on a phone, with compact navigation and friends' posts">
 
 </details>
 
 ## Start with a friend
 
-A **circle** is a Clean Bookface site run by you or someone you trust. Everyone has their own account. Ask a friend who runs one for an invitation, create your account and save your recovery codes.
+A **circle** is a Clean Bookface site run by you or someone you trust. Everyone has their own account. Ask a friend who runs one for an invitation, create your account and save your recovery kit. Keep that kit somewhere private, away from this browser.
 
 That's all the setup you need to join. No terminal, hosting account or GitHub account. You can write your first post without bringing anything from Facebook.
 
 If you want your old memories here too:
 
-1. **Ask Facebook for your download.** Choose **JSON** as the format. You don't need to read or edit those files. [The guide shows which settings to choose.](docs/GETTING_STARTED.md)
+1. **Ask Facebook for your download.** Choose **JSON** as the format. You don't need to read or edit those files. [The guide shows which settings to choose.](docs/ENCRYPTED_GETTING_STARTED.md#bring-your-facebook-download)
 2. **Keep an original copy.** Download every part and save a separate backup somewhere private.
-3. **Open Bring your history.** Import the download, then check **Your memories** and the import report. Nothing is posted to your friends.
-4. **Share something you choose.** Accept each other as friends, pick a memory, preview it and choose who can see it. Or keep the whole archive to yourself.
+3. **Open My memories.** Select all the ZIP parts together, keep the tab open and read the import warnings. Nothing is posted to your friends.
+4. **Share something you choose.** Accept each other as friends, compare the identity check over a call, then pick a memory and choose who can see it. Or keep the whole archive to yourself.
 
 ## Nobody you know runs a circle?
 
-You can run one for your friends. The [five-step hosting guide](docs/HOST_YOUR_CIRCLE.md) walks through choosing a server, giving it a web address, running the setup helper and making your account. The app then helps you work through the host checklist.
+You can run a storage home for your friends. [The encrypted hosting guide](encrypted-host/SELF_HOST.md) covers a new home, its address, private invitations and tested backups. Your friends use a separately published browser app to open their encrypted memories.
 
-Hosting does mean looking after a server, updates and backups. The guided setup uses Linux, Node.js and Docker; you don't have to write code. [Compare the practical options and costs](docs/HOSTING.md) before committing to a monthly bill. The software is free; hosting, storage and a domain may cost money.
+Hosting does mean looking after a server, updates and backups. A host needs Linux, Docker and someone willing to maintain it. Joining a friend's home avoids that work. [Compare the practical choices and a small shared-server budget](docs/ENCRYPTED_HOSTING.md) before renting anything. The software is free; hosting, storage and a domain may cost money.
 
 GitHub is where you get the software and help improve it. Your friends use your circle's website.
 
@@ -48,8 +48,8 @@ GitHub is where you get the software and help improve it. Your friends use your 
 
 - **Friends' posts, in order.** No ads, suggested strangers or infinite scroll. Catch up and get on with your day.
 - **A place for your history.** Browse supported posts, photos, albums and message history. Imported conversations have no sharing button.
-- **Your own company.** Invite friends, favorite people, mute or block as needed. Importing a friend list doesn't contact anyone or add them as friends here.
-- **An exit that works both ways.** Download your account, move your memories to another circle or delete your account in Settings.
+- **Your own company.** Invite friends, reply, react or block as needed. Importing a friend list doesn't contact anyone or add them as friends here.
+- **An exit that works both ways.** Download your saved imports, move your memories to another home or close your account. Your recovery kit lets you open your encrypted memories in a new browser.
 
 ## Leaving Facebook is your decision
 
@@ -63,14 +63,14 @@ We have no exciting opportunity to monetize your friendships.
 
 We do have a few things you should know before uploading:
 
-- **Trust your host.** Other members cannot browse your private archive through the app. The person running the server can access its stored data. This version is not end-to-end encrypted.
+- **Know who handles your keys.** The browser encrypts memories before they reach the storage home. The app publisher still has to be trusted: someone who replaces the app can steal keys. A different web address alone does not make the publisher independent. Homes still see account names, friendships, timing and file sizes.
 - **Keep your original download.** Facebook exports vary and not everything is supported. Check the import report for skipped or missing items.
 - **A shared copy is a shared copy.** Friends can save what you send them. Removing a post cannot erase a screenshot; older backups can retain deleted data until the host removes them.
 - **People, please.** Bots, automated personas, scraping and bulk posting are against the rules. Invitations, limits, reports and moderation help enforce them. Accessibility tools are welcome. We don't ask for ID documents or claim perfect bot detection.
 
-Read the [privacy contract](docs/PRIVACY.md) and [account export and deletion guide](docs/PORTABILITY.md). A host is responsible for explaining their own hosting and retention arrangements.
+Read the [encryption contract](docs/ENCRYPTION.md) and [moving, recovery and account-closing guide](docs/ENCRYPTED_GETTING_STARTED.md#move-recover-or-leave). A host is responsible for explaining their own hosting and retention arrangements.
 
-An encrypted version is being built separately, so a storage host would not receive the keys to your memories. It is **not ready for personal archives** and has not replaced this preview. [Follow the work and its remaining problems in draft PR #4.](https://github.com/Dynobit/clean-bookface/pull/4)
+Already using **v0.1**? Its host can read stored memories; it has not become encrypted through a website update. Keep the old installation until you have exported your account, imported a separate encrypted copy and recovered that copy successfully. [Migration and the remaining privacy limits](docs/ENCRYPTED_GETTING_STARTED.md#move-recover-or-leave).
 
 ## Pull up a chair
 
@@ -82,20 +82,20 @@ There are useful jobs waiting: try the instructions, check a screen with a keybo
 
 The project is still owner-maintained. We welcome people who want to take responsibility for a part of it; no maintainer group has been appointed yet. [Community stewardship](GOVERNANCE.md) explains how decisions and responsibilities can be shared without giving contributors access to members’ data.
 
-**[Download the released preview](https://github.com/Dynobit/clean-bookface/releases/tag/v0.1.0-preview.1)** · **[See what is tested and what remains](docs/RELEASE.md)** · **[Visit the project website](https://cleanbookface.org/)**
+**[Releases and downloads](https://github.com/Dynobit/clean-bookface/releases)** · **[See what is tested and what remains](docs/RELEASE.md)** · **[Visit the project website](https://cleanbookface.org/)**
 
 <details>
 <summary><strong>For hosts and developers: installation, backups and technical documentation</strong></summary>
 
 | I want to…                              | Read this                                                                                |
 | --------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Host my first circle                    | [Five-step hosting guide](docs/HOST_YOUR_CIRCLE.md)                                      |
-| Choose a server and understand the bill | [Hosting and costs](docs/HOSTING.md)                                                     |
-| Find advanced installation settings     | [Installation reference](docs/INSTALL.md)                                                |
-| Back up, update or recover a circle     | [Operations](docs/OPERATIONS.md)                                                         |
-| Connect circles on different servers    | [Cross-host connections](docs/FEDERATION.md)                                             |
-| Run the local demo or change the code   | [Development guide](docs/DEVELOPMENT.md)                                                 |
-| Follow the encrypted browser work      | [Development preview and privacy boundaries](encrypted-client/README.md)                |
+| Host my first circle                    | [Encrypted home installation](encrypted-host/SELF_HOST.md)                                      |
+| Choose a server and understand the bill | [Encrypted hosting choices and costs](docs/ENCRYPTED_HOSTING.md)                                                     |
+| Find advanced installation settings     | [Encrypted host operations](encrypted-host/OPERATIONS.md)                                                |
+| Back up, update or recover a circle     | [Backups and recovery](encrypted-host/OPERATIONS.md)                                                         |
+| Connect circles on different servers    | [Cross-home connections](encrypted-host/FEDERATION.md)                                             |
+| Run the local demo or change the code   | [Encrypted client development](encrypted-client/README.md)                                                 |
+| Follow the encrypted browser work      | [Browser client and privacy boundaries](encrypted-client/README.md)                |
 | Inspect the remaining release work      | [Release evidence](docs/RELEASE.md), [backlog](docs/BACKLOG.md), [security](SECURITY.md) |
 
 </details>

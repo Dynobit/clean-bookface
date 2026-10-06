@@ -1,5 +1,7 @@
 # Bring your memories. Take your time.
 
+> This page describes the older **v0.1 application**. For the encrypted version, use the [member guide](ENCRYPTED_GETTING_STARTED.md), [hosting guide](../encrypted-host/SELF_HOST.md) and [encryption contract](ENCRYPTION.md). The two versions have different privacy and hosting requirements.
+
 Facebook lets account holders request a download of their own information. You need access to the account, and the download may not contain everything you expect. You can keep a copy without joining Clean Bookface or leaving Facebook.
 
 **Downloading, importing and deleting are three separate choices.** Clean Bookface never asks for your Facebook password, signs in for you, or sends a deletion request to Meta. Importing here changes nothing on Facebook.
