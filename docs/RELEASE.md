@@ -8,6 +8,8 @@ The source also includes installation, restricted HTTPS delivery, optional cross
 
 This is a **preview for fictional data**, not an independently audited security release. Independent human security and accessibility reviews and the five-person usability study are still open. The browser publisher remains trusted; a storage operator who can replace the browser code can steal keys. Homes retain connection and membership metadata. Recipients and older backups can retain copies.
 
+The final application source `5a14233444577d9e7f2317966e6ad386de6bae3e` passed an uninterrupted public journey covering encrypted sharing, recovery, export and account closure, plus all eight jobs in [GitHub run 37432224091](https://github.com/Dynobit/clean-bookface/actions/runs/37432224091). The [final qualification](../encrypted-client/QUALIFICATION.md#final-encrypted-preview-qualification-6-october) records the request and host scans, exact asset readbacks and refreshed backup. Later documentation-only commits do not change those application inputs.
+
 Current reproducible client and host evidence, including failed attempts and measured limits, is recorded in [client qualification](../encrypted-client/QUALIFICATION.md) and [host qualification](../encrypted-host/QUALIFICATION.md). The [beginner guide](ENCRYPTED_GETTING_STARTED.md), [hosting choices](ENCRYPTED_HOSTING.md) and [installation procedure](../encrypted-host/SELF_HOST.md) describe this version. The earlier release record below applies only to v0.1.
 
 ## Historical v0.1 qualification
