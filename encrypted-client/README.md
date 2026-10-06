@@ -2,7 +2,7 @@
 
 Your home stores encrypted memories. Your browser opens them. A separate, trusted publisher supplies the browser app, so the storage operator does not also control the code handling your keys.
 
-This is the next-release preview, on `privacy-next`. Independent human security, accessibility and usability reviews remain open. Use fictional accounts while release qualification finishes. The existing v0.1 app is not end-to-end encrypted and is not upgraded automatically.
+This is the encrypted preview, maintained on `main`. Independent human security, accessibility and usability reviews remain open. Use fictional accounts while release qualification finishes. The existing v0.1 app is not end-to-end encrypted and is not upgraded automatically.
 
 **[Start here: a guide for people](../docs/ENCRYPTED_GETTING_STARTED.md)** · **[Host a home](../encrypted-host/SELF_HOST.md)** · **[What has been tested](QUALIFICATION.md)**
 
@@ -26,7 +26,7 @@ Homes still see account names, memberships, timing and file sizes. They can with
 
 Waiting changes belong to the browser that created them. Keep that browser until they finish or you explicitly stop retrying. They are not a portable account-wide outbox. Keep the recovery kit separately from server backups: either one alone is insufficient to recover everything.
 
-The streaming importer bounds input, decompression and retained batches. Current guard limits are 10 GiB input/expanded ZIP bytes, 64 selected files and 64 MiB per original attachment. Portable and legacy formats retain their own smaller bounds. A guard limit is not a browser capacity claim; see the measured qualification before choosing a workload.
+The streaming importer bounds input, decompression and retained batches. Current guard limits are 10 GiB input/expanded ZIP bytes, 64 selected files and 64 MiB per original attachment. Portable single-part exports retain a 256 MiB input limit. Nested v0.1 account exports stream through encrypted temporary browser storage; their source and expansion budgets remain bounded. A guard limit is not a browser capacity claim; see the measured qualification before choosing a workload.
 
 ## Try a fictional circle locally
 
@@ -49,7 +49,7 @@ Publish only `dist/` to a separate HTTPS origin. Apply `public/_headers` as real
 
 Matrix SDK 43.0.0 and Rust crypto handle encryption and key backup. `signed-content.ts` also authenticates the complete purpose, sender, room and attachment descriptor with the account identity. This preserves authenticated reading after an original device is deleted; decryption alone is insufficient evidence of authorship.
 
-The adapter pins the SDK's canonical-JSON signer and one native identity handle. It does not export private keys and fails closed if the reviewed interfaces disappear. `recipient-boundary.ts` checks the complete permitted recipient set after asynchronous member loading, before keys are shared, and discards older outbound sessions when installed. Never call the SDK's room-history-sharing API, which bypasses that boundary.
+The adapter pins the SDK's canonical-JSON signer, native identity handle and recovery-publication interfaces. It does not export private keys and fails closed if the reviewed interfaces disappear. `recipient-boundary.ts` checks the complete permitted recipient set after asynchronous member loading, before keys are shared, and discards older outbound sessions when installed. Never call the SDK's room-history-sharing API, which bypasses that boundary.
 
 `identity.ts` gives each initial sync a fresh namespaced inline-filter field. Synapse otherwise reuses an older initial-sync response for the same filter and device, even when the SDK adds its HTTP cache buster. Incremental sync filters and authentication are preserved. This integration has a real reload/recovery regression test.
 

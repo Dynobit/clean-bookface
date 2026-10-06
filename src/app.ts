@@ -365,7 +365,10 @@ export function createApplication(
         return c.text('Request origin does not match this host.', 403);
       if (c.req.header('sec-fetch-site') === 'cross-site')
         return c.text('Cross-site requests are not allowed.', 403);
-      core.rate('http:global:mutation', 1000, 60_000);
+      const session = getSession(c);
+      if (session) core.rate(`http:mutation:${session.user.id}`, 1000, 60_000);
+      else if (!['/actions/login', '/actions/register', '/actions/recover'].includes(c.req.path))
+        core.rate('http:anonymous:mutation', 1000, 60_000);
     }
     await next();
   });
@@ -435,7 +438,6 @@ export function createApplication(
   });
   app.post('/actions/login', async (c) => {
     const d = await readFields(c);
-    core.rate('http:login', 60, 60_000);
     const s = await core.login(value(d, 'username'), value(d, 'password'));
     signIn(c, s);
     const next = value(d, 'next');
@@ -499,7 +501,8 @@ export function createApplication(
   });
   app.post('/actions/register', async (c) => {
     const d = await readFields(c);
-    core.rate('http:register', 20, 60_000);
+    core.inspectInvite(value(d, 'inviteToken'));
+    core.rate(`http:register:${value(d, 'inviteToken')}`, 20, 60_000);
     if (!flag(d, 'acceptRules')) throw new CoreError(400, 'Please accept the house rules.');
     const { session: s, ...r } = await core.register(
       {
@@ -527,7 +530,6 @@ export function createApplication(
   );
   app.post('/actions/recover', async (c) => {
     const d = await readFields(c);
-    core.rate('http:recover', 20, 60_000);
     const { session: s, ...r } = await core.recover(
       value(d, 'username'),
       value(d, 'code'),
@@ -1157,6 +1159,7 @@ export function createApplication(
       like: 'liked a post',
       'friend.request': 'sent a friend request',
       'friend.accept': 'accepted your friendship',
+      'friend.failed': 'could not confirm this friendship; please send a new request',
     };
     return show(
       c,

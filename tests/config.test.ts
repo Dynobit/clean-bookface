@@ -107,3 +107,15 @@ test('pilot requires a strictly ordered pair of real absolute UTC timestamps', (
   assert.throws(() => readConfig({ ...valid, PILOT_READ_ONLY_AT: valid.PILOT_ENDS_AT }));
   assert.throws(() => readConfig({ ...valid, PILOT_READ_ONLY_AT: '2028-01-01T00:00:00Z' }));
 });
+
+test('SUP04 refuses federation with fixed pilot dates before serving any content', () => {
+  assert.throws(
+    () =>
+      readConfig({
+        FEDERATION_ENABLED: 'true',
+        PILOT_READ_ONLY_AT: '2027-01-01T00:00:00Z',
+        PILOT_ENDS_AT: '2027-01-15T00:00:00Z',
+      }),
+    /Pilot dates require FEDERATION_ENABLED=false/,
+  );
+});

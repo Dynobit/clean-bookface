@@ -77,6 +77,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
     Date.parse(pilotReadOnlyAt) >= Date.parse(pilotEndsAt)
   )
     throw new Error('PILOT_READ_ONLY_AT must be before PILOT_ENDS_AT');
+  if (pilotReadOnlyAt !== undefined && env.FEDERATION_ENABLED === 'true')
+    throw new Error(
+      'Pilot dates require FEDERATION_ENABLED=false; export-only pilots cannot receive federated removals.',
+    );
   return {
     origin: origin.origin,
     dataDir: resolve(env.DATA_DIR ?? './data'),

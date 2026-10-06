@@ -21,6 +21,9 @@
 * {
   box-sizing: border-box;
 }
+html {
+  scroll-padding-top: 85px;
+}
 body {
   margin: 0;
   background: var(--ground);
@@ -28,7 +31,8 @@ body {
 }
 a {
   color: #285487;
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
 }
 a:hover {
   text-decoration: underline;
@@ -126,8 +130,10 @@ label {
   margin-top: 4px;
 }
 :focus-visible {
-  outline: 3px solid #d8a526;
+  outline: 3px solid #182f50;
   outline-offset: 3px;
+  box-shadow: 0 0 0 3px #fff;
+  scroll-margin-top: 85px;
 }
 small,
 .muted {

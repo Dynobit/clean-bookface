@@ -20,7 +20,7 @@ async function fixture(t: test.TestContext, extra: NodeJS.ProcessEnv = {}) {
     MAX_ACCOUNTS: '2',
     ARCHIVE_ACCOUNT_BYTES: '1048576',
     CLOUDFLARE_PROXY: 'true',
-    FEDERATION_ENABLED: 'true',
+    FEDERATION_ENABLED: 'false',
     PILOT_READ_ONLY_AT: '2027-01-01T00:00:00Z',
     PILOT_ENDS_AT: '2027-01-15T00:00:00Z',
     ...extra,

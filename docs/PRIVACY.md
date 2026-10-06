@@ -29,14 +29,14 @@ TLS protects transport. SQLite databases and container volumes are **not automat
 
 ## Data boundaries
 
-| Data | Permitted access and movement |
-| --- | --- |
-| Original archive and imported records | Account owner through authenticated routes; never federation input by default. |
-| Original photos and videos | Owner-only storage; sharing uses separately generated derivatives. |
-| Publications and derivatives | Author and explicitly authorized recipients; recipient hosts receive only the shared representation. |
-| Friendship and audience records | Owner and narrowly necessary application processing; no public roster. |
+| Data                                                   | Permitted access and movement                                                                                                                                          |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Original archive and imported records                  | Account owner through authenticated routes; never federation input by default.                                                                                         |
+| Original photos and videos                             | Owner-only storage; sharing uses separately generated derivatives.                                                                                                     |
+| Publications and derivatives                           | Author and explicitly authorized recipients; recipient hosts receive only the shared representation.                                                                   |
+| Friendship and audience records                        | Owner and narrowly necessary application processing; no public roster.                                                                                                 |
 | Credentials, sessions, signing keys, recovery material | Dedicated protected storage; excluded from member exports, logs, screenshots, and support bundles. Operator disaster recovery uses a separate encrypted secret bundle. |
-| Operational events | Minimal identifiers, outcomes, and timing; no archive bodies, message text, credentials, or invitation tokens. |
+| Operational events                                     | Minimal identifiers, outcomes, and timing; no archive bodies, message text, credentials, or invitation tokens.                                                         |
 
 The Git repository, CI, issue tracker, screenshots, and examples must contain synthetic fixtures only. A private GitHub repository is not a suitable home for personal archives or production secrets. Telemetry and external analytics are absent by default; static assets and fonts are served locally.
 
@@ -154,9 +154,16 @@ Use synthetic data on two isolated HTTPS instances, with Alice on A and Bob plus
 
 ## People control the experience; bot accounts are prohibited
 
-Authentication has both host-wide and per-account request limits. These bound
-work, but a determined sender can still temporarily prevent sign-in by consuming
-those shared budgets. The application does not treat forwarded IP headers as
+Authentication limits attempts per account; nonexistent account names share a
+separate budget for expensive password work. Authenticated mutations have their
+own per-member budget, so anonymous requests do not consume it. Targeted abuse
+can still exhaust one account’s attempt budget or compete for host resources.
+The different known-account and shared unknown-name thresholds can also reveal
+whether a username exists. This is an explicit trade-off: per-account limits
+retain brute-force protection, while shared unknown-name budgets prevent random
+names from creating an unbounded rate-limit table. Account existence is not a
+privacy guarantee, and targeted temporary password/recovery lockout remains
+possible. The application does not treat forwarded IP headers as
 trusted identity and does not implement a per-IP limiter. Internet-facing hosts
 may need upstream filtering during abuse; the limits are not a denial-of-service
 guarantee.

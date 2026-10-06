@@ -114,7 +114,7 @@ test('multipart routes reject missing sessions and invalid header CSRF before re
   }
 });
 
-test('login attempts across distinct usernames share a host-wide request limit', async (t) => {
+test('unknown-name login flood is bounded without spending real members’ login budget', async (t) => {
   const ctx = await fixture(t);
   for (let index = 0; index < 60; index++) {
     const response = await ctx.mutate('/actions/login', {
@@ -132,6 +132,22 @@ test('login attempts across distinct usernames share a host-wide request limit',
     ).status,
     429,
   );
+  assert.equal((await ctx.mutate('/actions/login', { username: 'alice', password })).status, 200);
+});
+
+test('anonymous mutation flood cannot exhaust authenticated posting or export access', async (t) => {
+  const ctx = await fixture(t);
+  for (let index = 0; index < 1000; index++) await ctx.mutate('/actions/not-a-real-route', {});
+  assert.equal((await ctx.mutate('/actions/not-a-real-route', {})).status, 429);
+  const posted = await ctx.mutate(
+    '/actions/posts',
+    { body: 'A fictional private post', audience: 'private' },
+    ctx.alice,
+  );
+  assert.equal(posted.status, 200, await posted.clone().text());
+  const exported = await ctx.mutate('/actions/export', {}, ctx.alice);
+  assert.equal(exported.status, 200);
+  await exported.arrayBuffer();
 });
 
 test('setup requires private server code and production cookies carry session protections', async (t) => {

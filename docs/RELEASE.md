@@ -1,5 +1,11 @@
 # Release qualification
 
+## Review hardening, 6 October 2026
+
+The requested exact Opus 5.5 source reviews are complete. The follow-up implements interrupted recovery, isolated archive failures, realistic imports, photo sharing, durable retry, conversation exports, browser-encrypted search indexes and host maintenance improvements. [Review scope and changes](REVIEW_2026_10.md). This candidate is still under qualification; the deployed baseline and its evidence are recorded below.
+
+**Personal-data production remains unqualified:** current host-image scans have unresolved advisories, and independent human security/accessibility review and the usability study remain open. The preview uses fictional data. [Dependency findings](ENCRYPTED_DEPENDENCY_UPGRADES.md).
+
 ## Encrypted preview, 6 October 2026
 
 The v0.2 browser client and storage home are separate from the earlier v0.1 application. The encrypted preview includes invited accounts, recovery kits, private Facebook imports, verified pairwise sharing, photos, comments, reactions, blocking, selected-evidence reports and account closure. Saved imports can be searched and exported in the browser. Existing v0.1 accounts can export and import a separate encrypted copy; no installation becomes encrypted automatically.
@@ -14,7 +20,7 @@ Current reproducible client and host evidence, including failed attempts and mea
 
 ## Historical v0.1 qualification
 
-The owner approved the v0.1 public preview of the source and project website on 5 October 2026. Public source availability and the project website are verified. This release offers no official hosting or public sign-up service and does not upgrade the operator-only pilot. Independent human security and accessibility review and the five-person usability study remain open; the requested exact Opus review was unavailable. The dated evidence below records its original scope, including earlier private checkpoints.
+The owner approved the v0.1 public preview of the source and project website on 5 October 2026. Public source availability and the project website are verified. This release offers no official hosting or public sign-up service and does not upgrade the operator-only pilot. Independent human security and accessibility review and the five-person usability study remain open; the requested exact Opus review was unavailable at that historical checkpoint. The 6 October Opus 5.5 reviews are recorded above. The dated evidence below records its original scope, including earlier private checkpoints.
 
 ## Historical public status, 5 October 2026
 

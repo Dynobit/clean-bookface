@@ -105,19 +105,22 @@ test('one GiB Facebook import survives encrypted batch storage and clean-browser
           .fill(recovery.replace(/\s/g, '').slice(-6));
         await page.getByRole('button', { name: 'I saved it. Open my book.', exact: true }).click();
       }
-      await ready(page, 'button:has-text("My memories")');
+      await ready(page, '#section-memories');
       return recovery!;
     };
     const page = await first.newPage(),
       key = await login(page);
     await page.getByRole('button', { name: 'My memories', exact: true }).click();
-    await page.getByLabel('Choose archive ZIP files').setInputFiles(fixture.path);
+    const archivePicker = page.getByLabel('Choose archive ZIP files');
+    await expect(archivePicker).toBeEnabled();
+    await archivePicker.setInputFiles(fixture.path);
     await page.getByRole('button', { name: 'Bring in my memories', exact: true }).click();
     await expect(page.locator('#notice')).toContainText(
       '64 memories imported privately in 13 parts. Recovery checked.',
       { timeout: 600_000 },
     );
     await expect(page.locator('#notice.error')).toHaveCount(0);
+    console.log('LARGE_IMPORT_PROOF import-complete');
     const listParts = async (target: Page) => {
       const show = target.getByRole('button', { name: 'Show saved imports', exact: true });
       if (!(await show.isVisible()))
@@ -151,10 +154,18 @@ test('one GiB Facebook import survives encrypted batch storage and clean-browser
     await login(recovered, key);
     await recovered.getByRole('button', { name: 'My memories', exact: true }).click();
     await listParts(recovered);
+    // List while the background preview can still be loading; its final render
+    // must retain every listed download instead of collapsing/resetting the list.
+    await expect(recovered.getByLabel('Choose archive ZIP files')).toBeEnabled({ timeout: 60_000 });
+    await expect(
+      recovered.getByRole('button', { name: /^Download saved import \d+$/ }),
+    ).toHaveCount(13);
+    console.log('LARGE_IMPORT_PROOF clean-recovery-parts-listed');
     let exportedBytes = 0,
       count = 0;
     for (let part = 1; part <= 13; part++) {
-      const pending = recovered.waitForEvent('download');
+      console.log(`LARGE_IMPORT_PROOF download-start part=${part}`);
+      const pending = recovered.waitForEvent('download', { timeout: 60_000 });
       await recovered
         .getByRole('button', { name: `Download saved import ${part}`, exact: true })
         .click();
@@ -176,6 +187,10 @@ test('one GiB Facebook import survives encrypted batch storage and clean-browser
         exportedBytes += attachment.bytes.size;
       }
       await download.delete();
+      await expect(
+        recovered.getByRole('button', { name: /^Download saved import \d+$/ }),
+      ).toHaveCount(13);
+      console.log(`LARGE_IMPORT_PROOF download-verified part=${part}`);
     }
     expect(searchLeaks).toEqual([]);
     expect(count).toBe(64);

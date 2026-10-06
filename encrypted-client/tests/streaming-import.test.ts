@@ -104,15 +104,15 @@ test('corrupt media CRC, malicious directory allocation, invalid structure and u
     /unknown formats/,
   );
 });
-test('missing media stays explicit; oversized records fail without silently splitting; cancellation aborts', async () => {
+test('missing media and oversized record skips stay explicit; cancellation aborts', async () => {
   const f = await fixture(1);
   const missing = [];
   for await (const batch of importArchiveBatches([f.meta])) missing.push(...batch.warnings);
   assert.match(missing.join(' '), /Missing media: photos\/0.jpg/);
-  await assert.rejects(
-    importArchiveBatches([f.meta, f.media], { batchBytes: 1024 }).next(),
-    /One memory exceeds/,
-  );
+  const skipped = await importArchiveBatches([f.meta, f.media], { batchBytes: 1024 }).next();
+  assert.equal(skipped.value?.records.length, 0);
+  assert.equal(skipped.value?.progress.counts?.records.skipped, 1);
+  assert.match(skipped.value?.warnings.join(' ') ?? '', /exceeds the import batch limit/);
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(

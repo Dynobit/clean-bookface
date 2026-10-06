@@ -4,12 +4,13 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { BlobReader, BlobWriter, ZipWriter } from '@zip.js/zip.js';
 import { importArchives, exportArchives } from '../src/archive.js';
+import { importArchiveBatches, type ImportTemporaryFile } from '../src/streaming-import.js';
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-async function zip(entries: Array<[string, Blob | string]>): Promise<File> {
+async function zip(entries: Array<[string, Blob | string]>, level = 0): Promise<File> {
   const writer = new ZipWriter(new BlobWriter(), { useWebWorkers: false });
   for (const [name, value] of entries)
     await writer.add(name, new BlobReader(value instanceof Blob ? value : new Blob([value])), {
-      level: 0,
+      level,
     });
   return new File([await writer.close()], 'legacy.zip');
 }
@@ -132,4 +133,97 @@ test('legacy checksum, revision identity, unknown formats and extra nested files
     ]),
     /manifest/,
   );
+});
+
+function memoryScratch(corrupt = false) {
+  let removed = false,
+    ciphertext = new Uint8Array();
+  return {
+    open: async (): Promise<ImportTemporaryFile> => {
+      const chunks: Uint8Array<ArrayBuffer>[] = [];
+      return {
+        writable: new WritableStream({
+          write: (chunk) => {
+            chunks.push(new Uint8Array(chunk));
+          },
+        }),
+        blob: async () => {
+          ciphertext = new Uint8Array(await new Blob(chunks).arrayBuffer());
+          if (corrupt) ciphertext[0] ^= 1;
+          return new Blob([ciphertext]);
+        },
+        remove: async () => {
+          removed = true;
+          chunks.length = 0;
+        },
+      };
+    },
+    removed: () => removed,
+    ciphertext: () => ciphertext,
+  };
+}
+async function nestedLegacy(input: File, level = 0) {
+  return zip(
+    [
+      [
+        'account.json',
+        JSON.stringify({
+          format: 'clean-bookface-account/1',
+          account: { actor: 'https://example.org/fictional' },
+          publications: [],
+          comments: [],
+        }),
+      ],
+      ['private-archive.zip', input],
+    ],
+    level,
+  );
+}
+test('streamed legacy migration keeps exact records and validates all revisions before yielding', async () => {
+  const input = await synthetic(),
+    expected = await importArchives([input]);
+  const records = [];
+  for await (const batch of importArchiveBatches([input])) records.push(...batch.records);
+  assert.deepEqual(records, expected.records);
+  await assert.rejects(
+    importArchiveBatches([
+      await synthetic({ revision: { item_id: 'orphan', version: 1, record: row } }),
+    ]).next(),
+    /Orphan/,
+  );
+});
+test('nested legacy staging persists only authenticated ciphertext and is removed on completion, cancellation and corruption', async () => {
+  const input = await nestedLegacy(await synthetic());
+  const scratch = memoryScratch(),
+    records = [];
+  for await (const batch of importArchiveBatches([input], { openTemporaryFile: scratch.open }))
+    records.push(...batch.records);
+  assert.equal(records.length, 2);
+  assert.equal(scratch.removed(), true);
+  assert.equal(Buffer.from(scratch.ciphertext()).includes(Buffer.from(row.body)), false);
+  assert.notDeepEqual([...scratch.ciphertext().slice(0, 4)], [0x50, 0x4b, 0x03, 0x04]);
+  const cancelled = memoryScratch(),
+    controller = new AbortController();
+  const generator = importArchiveBatches([input], {
+    openTemporaryFile: cancelled.open,
+    signal: controller.signal,
+  });
+  await generator.next();
+  controller.abort();
+  await assert.rejects(generator.next(), /aborted/i);
+  assert.equal(cancelled.removed(), true);
+  const damaged = memoryScratch(true);
+  await assert.rejects(importArchiveBatches([input], { openTemporaryFile: damaged.open }).next());
+  assert.equal(damaged.removed(), true);
+});
+
+test('deflated nested v0.1 account ZIP uses the same encrypted scratch path', async () => {
+  const scratch = memoryScratch(),
+    input = await nestedLegacy(await synthetic(), 6),
+    records = [];
+  for await (const batch of importArchiveBatches([input], { openTemporaryFile: scratch.open }))
+    records.push(...batch.records);
+  assert.equal(records.length, 2);
+  assert.equal(records[0].id, row.id);
+  assert.equal(scratch.removed(), true);
 });

@@ -130,6 +130,7 @@ test('private import survives recovery and verified friends can share', async ({
   };
   const zip = await exportArchives([record]);
   await a.getByRole('button', { name: 'My memories', exact: true }).click();
+  await expect(a.getByLabel('Choose archive ZIP files')).toBeEnabled();
   await a.getByLabel('Choose archive ZIP files').setInputFiles({
     name: 'synthetic-memory.zip',
     mimeType: 'application/zip',
@@ -177,7 +178,7 @@ test('private import survives recovery and verified friends can share', async ({
   await a.getByLabel('Write a post').fill(shared);
   await a
     .getByRole('checkbox', {
-      name: accounts.find((u) => u.username === 'bob')!.userId,
+      name: accounts.find((u) => u.username === 'bob')!.userId + ' · identity checked',
       exact: true,
     })
     .check();
@@ -186,7 +187,7 @@ test('private import survives recovery and verified friends can share', async ({
     timeout: 30_000,
   });
   await b.getByRole('button', { name: 'News feed', exact: true }).click();
-  await b.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+  await b.locator('#refresh-book').click();
   await expect(b.locator('.post-body').filter({ hasText: shared })).toBeVisible({
     timeout: 30_000,
   });
@@ -256,6 +257,7 @@ test('an invitation creates a fresh account and its first encrypted archive', as
   };
   const zip = await exportArchives([record]);
   await page.getByRole('button', { name: 'My memories', exact: true }).click();
+  await expect(page.getByLabel('Choose archive ZIP files')).toBeEnabled();
   await page.getByLabel('Choose archive ZIP files').setInputFiles({
     name: 'fictional.zip',
     mimeType: 'application/zip',
@@ -351,6 +353,7 @@ test('a large private photo crosses the host upload limit only as encrypted chun
     }
   });
   await page.getByRole('button', { name: 'My memories', exact: true }).click();
+  await expect(page.getByLabel('Choose archive ZIP files')).toBeEnabled();
   await page.getByLabel('Choose archive ZIP files').setInputFiles({
     name: 'large-fictional.zip',
     mimeType: 'application/zip',
@@ -427,7 +430,7 @@ test('an unsigned device receives no keys and a failed publication can be abando
   await a.getByLabel('Write a post').fill(marker);
   await a
     .getByRole('checkbox', {
-      name: accounts.find((u) => u.username === 'bob')!.userId,
+      name: accounts.find((u) => u.username === 'bob')!.userId + ' · identity checked',
       exact: true,
     })
     .check();
@@ -446,7 +449,12 @@ test('an unsigned device receives no keys and a failed publication can be abando
   await expect(x.getByLabel('Recovery key', { exact: true })).toBeVisible();
   await a.reload();
   await visibleOrError(a, a.getByRole('button', { name: 'Finish sending this post', exact: true }));
-  await expect(a.getByLabel('Write a post')).toHaveValue(marker);
+  await expect(
+    a
+      .locator('.card')
+      .filter({ has: a.getByRole('heading', { name: 'A post is waiting to finish', exact: true }) })
+      .locator('.post-body'),
+  ).toHaveText(marker);
   await a.getByRole('button', { name: 'Stop retrying this post', exact: true }).click();
   await expect(
     a.getByRole('button', { name: 'Share with selected friends', exact: true }),

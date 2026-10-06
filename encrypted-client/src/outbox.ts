@@ -6,6 +6,48 @@ import { deleteLocalDatabases } from './local-cleanup';
 export interface PendingPost {
   record: MemoryRecord;
   recipients: string[];
+  operationId?: string;
+  delivered?: string[];
+}
+const POST_LIMIT = 12 * 1024 * 1024;
+function encodeBytes(bytes: Uint8Array): string {
+  let text = '';
+  for (let at = 0; at < bytes.length; at += 8192)
+    text += String.fromCharCode(...bytes.subarray(at, at + 8192));
+  return btoa(text);
+}
+function validatePost(value: PendingPost): void {
+  const r = value?.record;
+  if (
+    !r ||
+    !['post', 'photo', 'album'].includes(r.kind) ||
+    r.privateOnly ||
+    typeof r.id !== 'string' ||
+    typeof r.text !== 'string' ||
+    r.text.length > 20_000 ||
+    typeof r.title !== 'string' ||
+    r.title.length > 2000 ||
+    (r.timestamp !== null && !Number.isSafeInteger(r.timestamp)) ||
+    !Array.isArray(r.attachments) ||
+    r.attachments.length > 4 ||
+    r.attachments.some(
+      (a, i) =>
+        !(a.bytes instanceof Blob) ||
+        a.bytes.size > 2 * 1024 * 1024 ||
+        a.mimeType !== 'image/jpeg' ||
+        a.path !== `photo-${i + 1}.jpg`,
+    ) ||
+    !Array.isArray(value.recipients) ||
+    !value.recipients.length ||
+    value.recipients.length > 100 ||
+    new Set(value.recipients).size !== value.recipients.length ||
+    value.recipients.some((p) => typeof p !== 'string' || !/^@[^\s:]+:[^\s]+$/.test(p)) ||
+    (value.operationId !== undefined && !/^[a-zA-Z0-9_-]{16,128}$/.test(value.operationId)) ||
+    (value.delivered !== undefined &&
+      (!Array.isArray(value.delivered) ||
+        value.delivered.some((p) => !value.recipients.includes(p))))
+  )
+    throw new Error('Invalid queued post.');
 }
 export interface PendingSocial {
   post: { roomId: string; id: string; sender: string };
@@ -76,7 +118,7 @@ export class BrowserOutbox {
       !(iv instanceof Uint8Array) ||
       iv.length !== 12 ||
       !(ciphertext instanceof ArrayBuffer) ||
-      ciphertext.byteLength > 100_000
+      ciphertext.byteLength > (slot === 'post' ? POST_LIMIT : 100_000)
     )
       throw new Error('Invalid queued post.');
     const plain = await crypto.subtle.decrypt(
@@ -93,21 +135,21 @@ export class BrowserOutbox {
   async load(): Promise<PendingPost | null> {
     const value = (await this.decrypt('post')) as PendingPost | null;
     if (!value) return null;
-    const r = value.record;
-    if (
-      !r ||
-      r.kind !== 'post' ||
-      typeof r.id !== 'string' ||
-      typeof r.text !== 'string' ||
-      r.text.length > 20_000 ||
-      !Number.isSafeInteger(r.timestamp) ||
-      r.attachments?.length !== 0 ||
-      !Array.isArray(value.recipients) ||
-      !value.recipients.length ||
-      value.recipients.length > 100 ||
-      value.recipients.some((p) => typeof p !== 'string' || !/^@[^\s:]+:[^\s]+$/.test(p))
-    )
+    if (!Array.isArray(value.record?.attachments) || value.record.attachments.length > 4)
       throw new Error('Invalid queued post.');
+    for (const a of value.record.attachments) {
+      const saved = a as unknown as { data?: unknown; bytes: Blob };
+      if (typeof saved.data !== 'string' || saved.data.length > 2_800_000)
+        throw new Error('Invalid queued photo.');
+      const binary = atob(saved.data);
+      saved.bytes = new Blob([Uint8Array.from(binary, (c) => c.charCodeAt(0))], {
+        type: a.mimeType,
+      });
+      delete saved.data;
+    }
+    validatePost(value);
+    value.operationId ??= value.record.id;
+    value.delivered ??= [];
     return value;
   }
   async loadSocial(): Promise<PendingSocial | null> {
@@ -137,12 +179,21 @@ export class BrowserOutbox {
     await this.saveValue('social', value);
   }
   async save(post: PendingPost): Promise<void> {
-    await this.saveValue('post', post);
+    validatePost(post);
+    const attachments = await Promise.all(
+      post.record.attachments.map(async (a) => ({
+        path: a.path,
+        mimeType: a.mimeType,
+        data: encodeBytes(new Uint8Array(await a.bytes.arrayBuffer())),
+      })),
+    );
+    await this.saveValue('post', { ...post, record: { ...post.record, attachments } });
   }
-  private async saveValue(slot: string, value: PendingPost | PendingSocial): Promise<void> {
+  private async saveValue(slot: string, value: unknown): Promise<void> {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const plain = new TextEncoder().encode(JSON.stringify(value));
-    if (plain.byteLength > 99_000) throw new Error('Queued post is too large.');
+    if (plain.byteLength > (slot === 'post' ? POST_LIMIT - 32 : 99_000))
+      throw new Error('Queued post is too large.');
     let ciphertext: ArrayBuffer;
     try {
       ciphertext = await crypto.subtle.encrypt(

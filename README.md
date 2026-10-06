@@ -10,11 +10,11 @@ Clean Bookface is a small, self-hosted social network with the feel of early Fac
 
 **[Join a friend](docs/ENCRYPTED_GETTING_STARTED.md#join-someone-you-know)** · **[Bring your memories](docs/ENCRYPTED_GETTING_STARTED.md#bring-your-facebook-download)** · **[Host your own circle](encrypted-host/SELF_HOST.md)** · **[Help build it](CONTRIBUTING.md)**
 
-_Encrypted preview · Free software for small circles. There is no official hosting service or public sign-up. Independent human security, accessibility and usability reviews remain open; use fictional memories while those checks are unfinished. [What has been tested](encrypted-client/QUALIFICATION.md)._
+_Encrypted preview · Free software for small circles. There is no official hosting service or public sign-up. Host dependencies still have unresolved security advisories, and independent human security, accessibility and usability reviews remain open. Use fictional memories while those checks are unfinished. [What has been tested](encrypted-client/QUALIFICATION.md)._
 
 ![Clean Bookface on desktop: blue navigation, a short friends list and a chronological feed](docs/images/encrypted-feed-desktop.png)
 
-The encrypted app, with fictional accounts and posts. These are screenshots of working software, including a verified conversation, reaction and comment.
+The encrypted app, with fictional accounts and posts. These are screenshots of working software, including verified conversations, photos, reactions and comments.
 
 <details>
 <summary>See it on a phone</summary>
@@ -49,7 +49,7 @@ GitHub is where you get the software and help improve it. Your friends use your 
 - **Friends' posts, in order.** No ads, suggested strangers or infinite scroll. Catch up and get on with your day.
 - **A place for your history.** Browse supported posts, photos, albums and message history. Imported conversations have no sharing button.
 - **Your own company.** Invite friends, reply, react or block as needed. Importing a friend list doesn't contact anyone or add them as friends here.
-- **An exit that works both ways.** Download your saved imports, move your memories to another home or close your account. Your recovery kit lets you open your encrypted memories in a new browser.
+- **An exit that works both ways.** Download your saved imports, save your conversations, move your memories to another home or close your account. Your recovery kit lets you open your encrypted memories in a new browser.
 
 ## Leaving Facebook is your decision
 
@@ -96,7 +96,7 @@ The project is still owner-maintained. We welcome people who want to take respon
 | Connect circles on different servers    | [Cross-home connections](encrypted-host/FEDERATION.md)                                             |
 | Run the local demo or change the code   | [Encrypted client development](encrypted-client/README.md)                                                 |
 | Follow the encrypted browser work      | [Browser client and privacy boundaries](encrypted-client/README.md)                |
-| Inspect the remaining release work      | [Release evidence](docs/RELEASE.md), [backlog](docs/BACKLOG.md), [security](SECURITY.md) |
+| Inspect the remaining release work      | [Release evidence](docs/RELEASE.md), [backlog](docs/BACKLOG.md), [security](SECURITY.md), [Opus review and fixes](docs/REVIEW_2026_10.md) |
 
 </details>
 

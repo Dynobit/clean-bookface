@@ -18,7 +18,17 @@ export default defineConfig({
       name: 'preview-security-headers',
       configurePreviewServer(server) {
         server.middlewares.use((_req, res, next) => {
-          for (const [key, value] of Object.entries(headers)) res.setHeader(key, value);
+          // Loopback hosts are a local preview feature, never a deployed CSP permission.
+          for (const [key, value] of Object.entries(headers))
+            res.setHeader(
+              key,
+              key === 'Content-Security-Policy'
+                ? value.replace(
+                    'connect-src https:;',
+                    'connect-src https: http://127.0.0.1:* http://localhost:* http://[::1]:*;',
+                  )
+                : value,
+            );
           next();
         });
       },

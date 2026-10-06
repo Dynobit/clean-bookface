@@ -18,7 +18,7 @@ export interface SocialEvent {
 }
 export interface SocialState {
   removed: boolean;
-  comments: { id: string; sender: string; text: string; timestamp: number }[];
+  comments: { id: string; sender: string; text: string; timestamp: number; removed?: boolean }[];
   reactions: { sender: string; reaction: string }[];
 }
 export function parseSocial(value: unknown): SocialPayload {
@@ -64,43 +64,67 @@ export function parseSocial(value: unknown): SocialPayload {
 export function socialState(
   post: { id: string; sender: string },
   events: SocialEvent[],
+  options?: {
+    onInvalid: (event: SocialEvent, error: unknown) => void;
+    includeRemovedComments?: boolean;
+  },
 ): SocialState {
   const state: SocialState = { removed: false, comments: [], reactions: [] };
   const seen = new Map<string, string>();
   const comments = new Map<string, SocialState['comments'][number]>();
   const removed = new Set<string>();
   const reactions = new Map<string, string>();
-  for (const event of events) {
-    const p = parseSocial(event.payload);
-    if (p.postId !== post.id || p.postSender !== post.sender)
-      throw new Error('Social post binding mismatch');
-    const key = `${event.sender}\0${p.id}`;
-    const fingerprint = JSON.stringify(Object.entries(p).sort(([a], [b]) => a.localeCompare(b)));
-    if (seen.has(key)) {
-      if (seen.get(key) !== fingerprint) throw new Error('Conflicting social operation identity');
-      continue;
+  const conflicting = new Set<string>();
+  if (options) {
+    const fingerprints = new Map<string, string>();
+    for (const event of events) {
+      const key = `${event.sender}\0${event.payload.id}`,
+        fingerprint = JSON.stringify(event.payload);
+      const previous = fingerprints.get(key);
+      if (previous !== undefined && previous !== fingerprint) conflicting.add(key);
+      fingerprints.set(key, fingerprint);
     }
-    seen.set(key, fingerprint);
-    if (p.kind === 'remove-post') {
-      if (event.sender !== post.sender) throw new Error('Only the post owner can remove a post');
-      state.removed = true;
-    } else if (p.kind === 'comment') {
-      const commentKey = `${event.sender}\0${p.id}`;
-      comments.set(commentKey, {
-        id: p.id,
-        sender: event.sender,
-        text: p.text,
-        timestamp: event.timestamp,
-      });
-    } else if (p.kind === 'remove-comment') {
-      const commentKey = `${event.sender}\0${p.commentId}`;
-      if (!comments.has(commentKey))
-        throw new Error('Only the commenter can remove an existing comment');
-      removed.add(commentKey);
-    } else if (p.reaction === null) reactions.delete(event.sender);
-    else reactions.set(event.sender, p.reaction);
   }
-  state.comments = [...comments].filter(([key]) => !removed.has(key)).map(([, comment]) => comment);
+  for (const event of events) {
+    try {
+      if (conflicting.has(`${event.sender}\0${event.payload.id}`))
+        throw new Error('Conflicting social operation identity');
+      const p = parseSocial(event.payload);
+      if (p.postId !== post.id || p.postSender !== post.sender)
+        throw new Error('Social post binding mismatch');
+      const key = `${event.sender}\0${p.id}`;
+      const fingerprint = JSON.stringify(Object.entries(p).sort(([a], [b]) => a.localeCompare(b)));
+      if (seen.has(key)) {
+        if (seen.get(key) !== fingerprint) throw new Error('Conflicting social operation identity');
+        continue;
+      }
+      seen.set(key, fingerprint);
+      if (p.kind === 'remove-post') {
+        if (event.sender !== post.sender) throw new Error('Only the post owner can remove a post');
+        state.removed = true;
+      } else if (p.kind === 'comment') {
+        const commentKey = `${event.sender}\0${p.id}`;
+        comments.set(commentKey, {
+          id: p.id,
+          sender: event.sender,
+          text: p.text,
+          timestamp: event.timestamp,
+        });
+      } else if (p.kind === 'remove-comment') {
+        const commentKey = `${event.sender}\0${p.commentId}`;
+        if (!comments.has(commentKey))
+          throw new Error('Only the commenter can remove an existing comment');
+        removed.add(commentKey);
+      } else if (p.reaction === null) reactions.delete(event.sender);
+      else reactions.set(event.sender, p.reaction);
+    } catch (error) {
+      if (!options) throw error;
+      options.onInvalid(event, error);
+    }
+  }
+  state.comments = [...comments]
+    .filter(([key]) => options?.includeRemovedComments || !removed.has(key))
+    .map(([key, comment]) => (removed.has(key) ? { ...comment, removed: true } : comment));
   state.reactions = [...reactions].map(([sender, reaction]) => ({ sender, reaction }));
   return state;
 }

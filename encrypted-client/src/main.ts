@@ -1,7 +1,7 @@
 import { verificationUpdate } from './verification-view';
 import './style.css';
-import { Identity, type Session, type VerificationView } from './identity';
-import { ContentStore, type SharedPost } from './content';
+import { Identity, SessionInUseError, type Session, type VerificationView } from './identity';
+import { ArchiveHistoryUnavailable, ContentStore, type SharedPost } from './content';
 import { BrowserOutbox, type PendingPost, type PendingSocial } from './outbox';
 import type { SocialAction } from './social';
 import {
@@ -12,12 +12,24 @@ import {
   deactivateAccount,
 } from './lifecycle';
 import { forgetDeviceCrypto } from './local-cleanup';
-import { importArchiveBatches } from './streaming-import';
+import {
+  importArchiveBatches,
+  cleanupImportTemporaryFiles,
+  type ImportCounts,
+} from './streaming-import';
 import { exportArchives, type MemoryRecord } from './archive';
+import { prepareSharedPhoto } from './shared-photo';
+import { RoomEvent } from 'matrix-js-sdk';
 
 const app = document.querySelector<HTMLElement>('#app')!;
 const notice = document.querySelector<HTMLElement>('#notice')!;
-const verification = document.querySelector<HTMLElement>('#verification')!;
+const verification = document.querySelector<HTMLDialogElement>('#verification')!;
+const invitation = new URLSearchParams(location.hash.slice(1));
+let invitedHome = invitation.get('home') || '';
+let invitedToken = invitation.get('invite') || '';
+invitation.delete('invite');
+// Remove invitation secrets before either saved-session or login routing runs.
+if (location.hash) history.replaceState(null, '', location.pathname + location.search);
 const SESSION = 'clean-bookface.session.v1';
 const CLEANUP = 'clean-bookface.cleanup.v1';
 const CLEANUP_PREFIX = 'clean-bookface.cleanup.v2:';
@@ -26,15 +38,47 @@ let identity: Identity | undefined;
 let content: ContentStore | undefined;
 let records: MemoryRecord[] = [];
 let feed: SharedPost[] = [];
+let feedCursor: string | undefined;
+let selectedConversation: string | undefined;
+let feedLimited = false;
+let mediaObserver: IntersectionObserver | undefined;
+let updateVersion = 0;
+let updatesAvailable = false;
 let section: 'feed' | 'memories' | 'friends' | 'account' = 'feed';
 let busy = false;
 let objectUrls: string[] = [];
 let currentVerification = '';
+let friendChecksReady = false;
+let cancelCurrentVerification: (() => Promise<void>) | undefined;
 let loginPassword = '';
 let outbox: BrowserOutbox | undefined;
 let pendingPost: PendingPost | null = null;
 let pendingSocial: PendingSocial | null = null;
 let selectedArchivePart: number | null = null;
+let archiveLoaded = false;
+let archiveLoading = false;
+let archiveError = '';
+let archiveDownloadView:
+  | {
+      store: ContentStore;
+      batches: Awaited<ReturnType<ContentStore['archiveBatches']>>['batches'];
+      cursor?: string;
+      listed: boolean;
+      loading: boolean;
+      open: boolean;
+    }
+  | undefined;
+let feedError = '';
+const conversationDownloads = new WeakMap<
+  ContentStore,
+  Map<string, { cursor?: string; part: number; complete: boolean; loading: boolean }>
+>();
+let refreshGeneration = 0;
+const verifiedFriends = new Set<string>();
+let draftText = '';
+let draftPhotos: File[] = [];
+let importFiles: File[] = [];
+const draftRecipients = new Set<string>();
 type CleanupScope = Pick<Session, 'baseUrl' | 'userId' | 'deviceId'> & { message: string };
 let pendingCleanup: CleanupScope | undefined;
 let pendingCleanupKey: string | undefined;
@@ -141,9 +185,21 @@ function tell(message: string, error = false): void {
     notice.append(text, dismiss);
   }
   notice.className = error ? 'error' : '';
+  notice.setAttribute('role', error ? 'alert' : 'status');
+  notice.setAttribute('aria-live', error ? 'assertive' : 'polite');
 }
 async function run(action: () => void | Promise<void>): Promise<void> {
   if (busy) return;
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const bookmark = focused
+    ? {
+        id: focused.id,
+        label: focused.getAttribute('aria-label'),
+        text: focused.textContent,
+        tag: focused.tagName,
+        scope: focused.closest<HTMLElement>('[data-focus-scope]')?.dataset.focusScope,
+      }
+    : null;
   busy = true;
   app.setAttribute('aria-busy', 'true');
   app.inert = true;
@@ -156,9 +212,36 @@ async function run(action: () => void | Promise<void>): Promise<void> {
     busy = false;
     app.setAttribute('aria-busy', 'false');
     app.inert = false;
+    if (!verification.open && bookmark && focused && !focused.isConnected) {
+      const target = bookmark.id
+        ? document.getElementById(bookmark.id)
+        : [...app.querySelectorAll<HTMLElement>('button,input,textarea,select,a,summary')].find(
+            (node) =>
+              node.tagName === bookmark.tag &&
+              node.getAttribute('aria-label') === bookmark.label &&
+              node.textContent === bookmark.text &&
+              node.closest<HTMLElement>('[data-focus-scope]')?.dataset.focusScope ===
+                bookmark.scope,
+          );
+      const fallback =
+        app.querySelector<HTMLElement>('[aria-current="page"]') ||
+        app.querySelector<HTMLElement>('h1,h2');
+      if (target) target.focus();
+      else if (fallback) {
+        fallback.tabIndex = -1;
+        fallback.focus();
+      }
+    } else if (
+      !verification.open &&
+      focused?.isConnected &&
+      document.activeElement === document.body
+    )
+      focused.focus();
   }
 }
 function clear(): void {
+  mediaObserver?.disconnect();
+  mediaObserver = undefined;
   for (const url of objectUrls) URL.revokeObjectURL(url);
   objectUrls = [];
   app.replaceChildren();
@@ -194,10 +277,8 @@ function sessionFromStorage(): Session | null {
 }
 function login(): void {
   clear();
-  const fragment = new URLSearchParams(location.hash.slice(1));
-  const home = fragment.get('home') || '';
-  const token = fragment.get('invite') || '';
-  if (location.hash) history.replaceState(null, '', location.pathname);
+  const home = invitedHome;
+  const token = invitedToken;
   const entry = el('div', '', 'entry');
   const intro = el('section', '', 'welcome');
   intro.append(
@@ -295,7 +376,11 @@ function login(): void {
         });
         localStorage.setItem(SESSION, JSON.stringify(session));
         password.value = '';
-        await openSession(session);
+        try {
+          await openSession(session);
+        } catch (error) {
+          showOpenFailure(session, error);
+        }
       } finally {
         submit.disabled = false;
       }
@@ -306,29 +391,68 @@ function login(): void {
   app.setAttribute('aria-busy', 'false');
 }
 async function openSession(session: Session): Promise<void> {
+  friendChecksReady = false;
+  // A consumed invitation must not reappear after in-place local cleanup.
+  invitedHome = '';
+  invitedToken = '';
   tell('Opening the secure browser and connecting to your home…');
-  identity = await Identity.open(session, showVerification);
-  content = new ContentStore(identity.client, (id) => identity!.requireVerifiedUser(id));
+  identity = await Identity.open(session, showVerification, (message) => tell(message, true));
+  const controller = identity;
+  controller.client.on(RoomEvent.Timeline, (event, room, older) => {
+    if (identity !== controller) return;
+    if (
+      older ||
+      !room ||
+      !['m.room.encrypted', 'org.cleanbookface.content.v1'].includes(event.getType())
+    )
+      return;
+    updateVersion++;
+    updatesAvailable = true;
+    const refresh = document.getElementById('refresh-book');
+    if (refresh) refresh.textContent = 'New updates — refresh';
+  });
+  content = new ContentStore(controller.client, (id) => controller.requireVerifiedUser(id));
   outbox = await BrowserOutbox.open(session);
   pendingPost = await outbox.load();
   pendingSocial = await outbox.loadSocial();
-  const status = await identity.status();
+  const status = await controller.status();
+  if (identity !== controller) return;
   tell('');
   if (!status.recoveryReady) {
-    recovery(status.recoveryConfigured || status.hasIdentity);
+    recovery(
+      status.recoveryConfigured || status.hasIdentity || status.recoverySetupResumable,
+      status.recoverySetupResumable && !status.recoveryReady,
+    );
     return;
   }
-  if (!status.ownDeviceTrusted || !status.crossSigningReady) {
+  if (!status.ownDeviceTrusted || !status.crossSigningReady || status.historyRecoveryNeeded) {
     recovery(true);
     return;
   }
   loginPassword = '';
-  await refresh();
+  friendChecksReady = true;
+  // Account controls must remain reachable even when history cannot be loaded.
+  render();
+  void refresh();
 }
-function recovery(existing: boolean): void {
+function recovery(existing: boolean, resuming = false): void {
+  const controller = identity;
+  if (!controller) return;
+  friendChecksReady = false;
+  // Recovery confers no friend trust. A new check can start after it finishes.
+  const cancel = cancelCurrentVerification;
+  cancelCurrentVerification = undefined;
+  currentVerification = '';
+  verification.close();
+  verification.replaceChildren();
+  if (cancel) void cancel().catch(() => {});
   clear();
   const c = card(
-    existing ? 'Welcome back. Open your memories.' : 'Keep a spare key to your memories.',
+    resuming
+      ? 'Finish setting up your recovery kit.'
+      : existing
+        ? 'Welcome back. Open your memories.'
+        : 'Keep a spare key to your memories.',
   );
   c.classList.add('narrow');
   c.append(
@@ -347,6 +471,14 @@ function recovery(existing: boolean): void {
     ),
   );
   const form = el('form');
+  if (resuming)
+    c.append(
+      el(
+        'p',
+        'Setup stopped before it finished. Use the kit you already saved. This keeps the same identity and keys.',
+        'notice-inline',
+      ),
+    );
   const pass = field(form, 'recovery-password', 'Account password', 'password', loginPassword);
   pass.required = true;
   if (existing) {
@@ -361,13 +493,18 @@ function recovery(existing: boolean): void {
     form.onsubmit = (e) => {
       e.preventDefault();
       void run(async () => {
+        if (identity !== controller) return;
         restore.disabled = true;
         try {
-          await identity!.restoreRecovery(key.value, pass.value);
+          if (resuming) await controller.resumeRecoverySetup(key.value, pass.value);
+          else await controller.restoreRecovery(key.value, pass.value);
+          if (identity !== controller) return;
           key.value = '';
           pass.value = '';
           loginPassword = '';
-          await refresh();
+          friendChecksReady = true;
+          await refresh({ archives: archiveLoaded });
+          if (identity !== controller) return;
           tell('Your memories are open on this browser.');
         } finally {
           restore.disabled = false;
@@ -378,8 +515,10 @@ function recovery(existing: boolean): void {
     const prepare = button(
       'Make my recovery kit',
       async () => {
+        if (identity !== controller) return;
         if (!pass.reportValidity()) return;
-        const key = await identity!.prepareRecovery();
+        const key = await controller.prepareRecovery();
+        if (identity !== controller) return;
         prepare.hidden = true;
         const area = el('textarea');
         area.readOnly = true;
@@ -388,8 +527,8 @@ function recovery(existing: boolean): void {
         area.setAttribute('aria-label', 'Your recovery key');
         const kit = {
           format: 'clean-bookface-recovery-v1',
-          home: identity!.session.baseUrl,
-          account: identity!.session.userId,
+          home: controller.session.baseUrl,
+          account: controller.session.userId,
           recoveryKey: key,
         };
         const save = button('Download recovery kit', () =>
@@ -402,16 +541,20 @@ function recovery(existing: boolean): void {
         confirm.autocomplete = 'off';
         confirm.spellcheck = false;
         const complete = button('I saved it. Open my book.', async () => {
+          if (identity !== controller) return;
           if (confirm.value.replace(/\s/g, '') !== key.replace(/\s/g, '').slice(-6))
             throw new Error('Check your saved copy and type its last 6 characters.');
           complete.disabled = true;
           try {
-            await identity!.setupRecovery(pass.value);
-            identity!.acknowledgeRecoveryKey();
+            await controller.setupRecovery(pass.value);
+            if (identity !== controller) return;
+            controller.acknowledgeRecoveryKey();
             pass.value = '';
             area.value = '';
             loginPassword = '';
+            friendChecksReady = true;
             await refresh();
+            if (identity !== controller) return;
             tell('Your book is ready. Imports stay private.');
           } finally {
             complete.disabled = false;
@@ -427,16 +570,82 @@ function recovery(existing: boolean): void {
   c.append(form, button('Use a different account', signOut, 'secondary form-action'));
   app.append(c);
 }
-async function refresh(): Promise<void> {
-  if (!content) return;
-  tell('Opening your encrypted memories…');
-  records = await content.privateArchive();
-  selectedArchivePart = null;
-  feed = await content.posts();
+async function refresh(options: { archives?: boolean } = {}): Promise<void> {
+  const store = content;
+  const controller = identity;
+  if (!store || !controller) return;
+  const generation = ++refreshGeneration;
+  const revision = updateVersion;
+  const loadArchive = options.archives === true || (section === 'memories' && !archiveLoaded);
+  if (options.archives === true && archiveLoaded) archiveDownloadView = undefined;
+  archiveLoading = loadArchive;
+  if (loadArchive && section === 'memories') render();
+  tell(loadArchive ? 'Opening your encrypted memories…' : 'Checking your friends’ posts…');
+  const results = await Promise.allSettled([
+    loadArchive ? store.privateArchiveView() : Promise.resolve(records),
+    store.postsPage(undefined, 20, selectedConversation),
+  ]);
+  if (generation !== refreshGeneration || content !== store || identity !== controller) return;
+  const verified = new Set<string>();
+  await Promise.all(
+    store.friendRooms().map(async (friend) => {
+      try {
+        await controller.requireVerifiedUser(friend.userId);
+        verified.add(friend.userId);
+      } catch {
+        /* Unverified friends remain visible, but cannot be selected for sharing. */
+      }
+    }),
+  );
+  if (generation !== refreshGeneration || content !== store || identity !== controller) return;
+  verifiedFriends.clear();
+  for (const id of verified) verifiedFriends.add(id);
+  if (updateVersion === revision) updatesAvailable = false;
+  if (loadArchive) {
+    archiveLoading = false;
+    archiveLoaded = true;
+    selectedArchivePart = null;
+    if (results[0].status === 'fulfilled') {
+      records = results[0].value as MemoryRecord[];
+      archiveError = '';
+    } else
+      archiveError =
+        'Your saved imports could not all be opened. Retry, use your recovery kit again, or download the parts that are available.';
+  }
+  if (results[1].status === 'fulfilled') {
+    const page = results[1].value as {
+      posts: SharedPost[];
+      nextCursor?: string;
+      limited?: boolean;
+    };
+    feed = page.posts;
+    feedCursor = page.nextCursor;
+    feedLimited = !!page.limited;
+    feedError = '';
+  } else
+    feedError =
+      'Your conversations could not be refreshed. Account controls and available memories remain open.';
   render();
   tell('');
 }
 function render(): void {
+  const downloads = app.querySelector<HTMLDetailsElement>('#saved-import-downloads');
+  if (downloads && archiveDownloadView && archiveDownloadView.store === content)
+    archiveDownloadView.open = downloads.open;
+  const active =
+    document.activeElement instanceof HTMLElement && app.contains(document.activeElement)
+      ? document.activeElement
+      : null;
+  const focus = active
+    ? {
+        id: active.id,
+        label: active.getAttribute('aria-label'),
+        tag: active.tagName,
+        scope: active.closest<HTMLElement>('[data-focus-scope]')?.dataset.focusScope,
+        start: active instanceof HTMLTextAreaElement ? active.selectionStart : null,
+        end: active instanceof HTMLTextAreaElement ? active.selectionEnd : null,
+      }
+    : null;
   clear();
   const shell = el('div', '', 'shell');
   const nav = el('nav', '', 'sidebar');
@@ -449,22 +658,77 @@ function render(): void {
     ['memories', 'My memories'],
     ['friends', 'Friends'],
     ['account', 'My account'],
-  ] as const)
-    nav.append(
-      button(
-        title,
-        () => {
-          section = value;
-          render();
-        },
-        value === section ? 'active' : '',
-      ),
+  ] as const) {
+    const tab = button(
+      title,
+      () => {
+        section = value;
+        render();
+        if (value === 'memories' && !archiveLoaded) void refresh({ archives: true });
+      },
+      value === section ? 'active' : '',
     );
+    tab.id = `section-${value}`;
+    if (value === section) tab.setAttribute('aria-current', 'page');
+    nav.append(tab);
+  }
+  const refreshButton = button(
+    updatesAvailable ? 'New updates — refresh' : 'Refresh my book',
+    () => refresh({ archives: section === 'memories' }),
+    'secondary small',
+  );
+  refreshButton.id = 'refresh-book';
+  nav.append(refreshButton);
   const center = el('div');
   center.append(el('p', identity!.session.userId, 'mobile-account'));
+  const unavailable = content!.unavailableContent();
+  if (archiveError || feedError || unavailable.length) {
+    const warning = card('Some memories need attention');
+    warning.append(
+      el(
+        'p',
+        archiveError ||
+          feedError ||
+          `${unavailable.length} saved parts or rooms could not be verified or decrypted. Available parts stay private and can still be opened or downloaded.`,
+      ),
+    );
+    warning.append(
+      button('Use my recovery kit again', () => recovery(true), 'secondary'),
+      button('Retry opening memories', () => refresh({ archives: true }), 'secondary'),
+    );
+    center.append(warning);
+  }
   if (section === 'feed') {
     composer(center);
     center.append(el('h2', 'News feed'));
+    const conversationLabel = el('label', 'Show conversations');
+    conversationLabel.htmlFor = 'feed-conversation';
+    const picker = el('select');
+    picker.id = 'feed-conversation';
+    const all = el('option', 'Recent conversations');
+    all.value = '';
+    picker.append(all);
+    for (const room of content!.conversationRooms()) {
+      const option = el('option', `${room.userId}${room.readOnly ? ' · saved history' : ''}`);
+      option.value = room.roomId;
+      picker.append(option);
+    }
+    picker.value = selectedConversation || '';
+    picker.onchange = () => {
+      void run(async () => {
+        selectedConversation = picker.value || undefined;
+        await refresh();
+      });
+    };
+    center.append(conversationLabel, picker);
+    if (feedLimited)
+      center.append(
+        el(
+          'p',
+          'This view has more history than can be opened at once. Choose one conversation above to see its posts, or download its saved parts in My account.',
+          'notice-inline',
+        ),
+      );
     for (const locked of content!.lockedRooms())
       center.append(
         el(
@@ -481,6 +745,31 @@ function render(): void {
         ),
       );
     else for (const p of feed) center.append(recordCard(p.record, p.sender, false, p.timestamp, p));
+    if (feedCursor)
+      center.append(
+        button(
+          'Show older posts',
+          async () => {
+            const store = content!,
+              controller = identity!,
+              generation = refreshGeneration,
+              roomId = selectedConversation;
+            const page = await store.postsPage(feedCursor, 20, roomId);
+            if (
+              content !== store ||
+              identity !== controller ||
+              generation !== refreshGeneration ||
+              selectedConversation !== roomId
+            )
+              return;
+            feed = page.posts;
+            feedCursor = page.nextCursor;
+            feedLimited = !!page.limited;
+            render();
+          },
+          'secondary form-action',
+        ),
+      );
   }
   if (section === 'memories') memories(center);
   if (section === 'friends') friends(center);
@@ -490,7 +779,7 @@ function render(): void {
   note.append(
     el('p', 'No trending tab. No suggested strangers. Just the people you choose.'),
     el('p', 'Imported memories are private until you share a separate copy.', 'help'),
-    button('Refresh my book', refresh, 'secondary small'),
+    button('Refresh conversations', () => refresh(), 'secondary small'),
   );
   const help = card('Still yours tomorrow');
   help.append(
@@ -507,15 +796,31 @@ function render(): void {
   aside.append(note, help);
   shell.append(nav, center, aside);
   app.append(shell);
+  if (focus && !verification.open) {
+    const next = focus.id
+      ? document.getElementById(focus.id)
+      : focus.label
+        ? [...app.querySelectorAll<HTMLElement>('[aria-label]')].find(
+            (node) =>
+              node.tagName === focus.tag &&
+              node.getAttribute('aria-label') === focus.label &&
+              node.closest<HTMLElement>('[data-focus-scope]')?.dataset.focusScope === focus.scope,
+          )
+        : undefined;
+    next?.focus();
+    if (next instanceof HTMLTextAreaElement && focus.start !== null)
+      next.setSelectionRange(focus.start, focus.end);
+  }
 }
 function empty(title: string, body: string): HTMLElement {
   const c = el('div', '', 'card empty');
   c.append(el('h3', title), el('p', body));
   return c;
 }
-function audience(parent: HTMLElement): () => string[] {
+function audience(parent: HTMLElement, chosen = new Set<string>()): () => string[] {
   const rooms = content!.friendRooms();
-  const chosen = new Set<string>();
+  for (const id of chosen)
+    if (!verifiedFriends.has(id) || !rooms.some((room) => room.userId === id)) chosen.delete(id);
   const heading = el('p', 'Share a separate copy with:', 'help');
   parent.append(heading);
   for (const friend of rooms) {
@@ -523,15 +828,121 @@ function audience(parent: HTMLElement): () => string[] {
     const cb = el('input');
     cb.type = 'checkbox';
     cb.value = friend.userId;
+    cb.disabled = !verifiedFriends.has(friend.userId);
+    cb.checked = chosen.has(friend.userId);
     cb.onchange = () => {
       if (cb.checked) chosen.add(cb.value);
       else chosen.delete(cb.value);
     };
-    label.append(cb, document.createTextNode(friend.userId));
+    label.append(
+      cb,
+      document.createTextNode(
+        `${friend.userId}${cb.disabled ? ' · check identity first' : ' · identity checked'}`,
+      ),
+    );
     parent.append(label);
   }
   if (!rooms.length) parent.append(el('p', 'Add and verify a friend first.', 'help'));
   return () => [...chosen];
+}
+async function prepareQueuedRecord(record: MemoryRecord): Promise<MemoryRecord> {
+  if (record.privateOnly || !['post', 'photo', 'album'].includes(record.kind))
+    throw new Error('This memory cannot be shared.');
+  if (record.attachments.length > 4)
+    throw new Error(
+      'Share up to four photos at a time. Individual imported photos are listed in My memories.',
+    );
+  if (record.text.length > 16_000 || record.title.length > 1024)
+    throw new Error(
+      'This memory is too long for a shared post. Write a shorter update in News feed; your full original stays private.',
+    );
+  const attachments = [];
+  for (const photo of record.attachments) {
+    const prepared = await prepareSharedPhoto(photo);
+    attachments.push({ ...prepared, path: `photo-${attachments.length + 1}.jpg` });
+  }
+  return {
+    id: record.id,
+    kind: record.kind,
+    timestamp: record.timestamp,
+    title: record.title,
+    text: record.text,
+    sourcePath: '',
+    privateOnly: false,
+    attachments,
+  };
+}
+async function queuePost(record: MemoryRecord, recipients: string[]): Promise<void> {
+  const controller = identity!,
+    store = content!,
+    box = outbox!;
+  if (pendingPost) throw new Error('Finish or stop the waiting post first.');
+  if (!recipients.length) throw new Error('Choose at least one friend.');
+  const queued: PendingPost = {
+    record: await prepareQueuedRecord(record),
+    recipients,
+    operationId: crypto.randomUUID(),
+    delivered: [],
+  };
+  assertCurrent(controller, store, box);
+  await box.save(queued);
+  assertCurrent(controller, store, box);
+  pendingPost = queued;
+  draftText = '';
+  draftPhotos = [];
+  draftRecipients.clear();
+  await finishPost();
+}
+async function finishPost(): Promise<void> {
+  if (!pendingPost) return;
+  const queued = pendingPost;
+  const controller = identity!,
+    store = content!,
+    box = outbox!;
+  const current = () => {
+    assertCurrent(controller, store, box);
+    if (pendingPost !== queued) throw new Error('This waiting post has changed.');
+  };
+  try {
+    const waiting = queued.recipients.filter((id) => !queued.delivered?.includes(id));
+    let failures: string[] = [];
+    if (waiting.length) {
+      const result = await store.share(queued.record, waiting, queued.operationId);
+      current();
+      queued.delivered = [
+        ...new Set([
+          ...(queued.delivered || []),
+          ...result.outcomes.filter((r) => r.status === 'sent').map((r) => r.userId),
+        ]),
+      ];
+      failures = result.outcomes.filter((r) => r.status === 'failed').map((r) => r.userId);
+      await box.save(queued);
+      current();
+    }
+    await controller.waitForKeyBackup();
+    current();
+    if (failures.length) {
+      render();
+      tell(
+        `Delivered to ${queued.delivered?.length || 0} friends. Still waiting: ${failures.join(', ')}. Check their identity or connection, then retry.`,
+        true,
+      );
+      return;
+    }
+    await box.clear();
+    current();
+    pendingPost = null;
+    await refresh();
+    assertCurrent(controller, store, box);
+    tell('Shared with the people you selected. Recovery backup checked.');
+  } catch (error) {
+    if (identity === controller && content === store) render();
+    throw error;
+  }
+}
+function assertCurrent(controller: Identity, store: ContentStore, box: BrowserOutbox): void {
+  if (identity !== controller || content !== store || outbox !== box)
+    throw new Error('This account session changed. Reopen its waiting changes before retrying.');
 }
 function composer(parent: HTMLElement): void {
   if (pendingSocial) {
@@ -555,24 +966,32 @@ function composer(parent: HTMLElement): void {
     );
     parent.append(pending);
   }
-  const c = card('What’s on your mind?');
-  const text = el('textarea');
-  text.setAttribute('aria-label', 'Write a post');
-  text.placeholder = 'A small update for your people…';
-  text.maxLength = 20_000;
-  c.append(text);
-  const choose = audience(c);
+  const c = card(pendingPost ? 'A post is waiting to finish' : 'What’s on your mind?');
+  c.dataset.focusScope = 'composer';
   if (pendingPost) {
-    text.value = pendingPost.record.text;
-    text.readOnly = true;
+    c.append(
+      el('p', pendingPost.record.text, 'post-body'),
+      el(
+        'p',
+        `${pendingPost.record.attachments.length} photos · ${pendingPost.delivered?.length || 0} of ${pendingPost.recipients.length} recipients delivered.`,
+        'help',
+      ),
+    );
+    for (const userId of pendingPost.recipients)
+      c.append(
+        el(
+          'p',
+          `${userId} · ${pendingPost.delivered?.includes(userId) ? 'delivered' : 'waiting'}`,
+          'help',
+        ),
+      );
     c.append(
       el(
         'p',
-        'A post is waiting to finish sending. Retry keeps the same post and the same recipients, including after refreshing this browser.',
+        'Retry keeps the same post and recipients, including after refreshing this browser. Keep this browser until it finishes.',
         'notice-inline',
       ),
-    );
-    c.append(
+      button('Finish sending this post', finishPost, 'form-action'),
       button(
         'Stop retrying this post',
         async () => {
@@ -583,55 +1002,78 @@ function composer(parent: HTMLElement): void {
         },
         'secondary small',
       ),
+    );
+  } else {
+    const text = el('textarea');
+    text.setAttribute('aria-label', 'Write a post');
+    text.placeholder = 'A small update for your people…';
+    text.maxLength = 16_000;
+    text.value = draftText;
+    text.oninput = () => {
+      draftText = text.value;
+    };
+    c.append(text);
+    const photos = field(c, 'post-photos', 'Add photos (optional)', 'file');
+    photos.multiple = true;
+    photos.accept = 'image/jpeg,image/png,image/webp';
+    if (draftPhotos.length) {
+      const transfer = new DataTransfer();
+      for (const photo of draftPhotos) transfer.items.add(photo);
+      photos.files = transfer.files;
+    }
+    photos.onchange = () => {
+      draftPhotos = [...(photos.files || [])];
+    };
+    c.append(
       el(
         'p',
-        'Stopping retries does not remove copies already delivered. People still waiting will not receive another attempt.',
+        'Up to four photos. Shared copies are smaller and have location and camera details removed. Your original files stay on your computer.',
         'help',
       ),
     );
+    const choose = audience(c, draftRecipients);
+    c.append(
+      button(
+        'Share with selected friends',
+        async () => {
+          if (!text.value.trim() && !photos.files?.length)
+            throw new Error('Write a little something or choose a photo first.');
+          if ((photos.files?.length || 0) > 4)
+            throw new Error('Choose up to four photos for one post.');
+          await queuePost(
+            {
+              id: crypto.randomUUID(),
+              kind: 'post',
+              timestamp: Date.now(),
+              text: text.value,
+              title: '',
+              sourcePath: '',
+              privateOnly: false,
+              attachments: [...(photos.files || [])].map((file) => ({
+                path: file.name,
+                mimeType: file.type,
+                bytes: file,
+              })),
+            },
+            choose(),
+          );
+        },
+        'form-action',
+      ),
+    );
   }
-  c.append(
-    button(
-      pendingPost ? 'Finish sending this post' : 'Share with selected friends',
-      async () => {
-        if (!pendingPost) {
-          if (!text.value.trim()) throw new Error('Write a little something first.');
-          if (!choose().length) throw new Error('Choose at least one friend.');
-          const record: MemoryRecord = {
-            id: crypto.randomUUID(),
-            kind: 'post',
-            timestamp: Date.now(),
-            text: text.value,
-            title: '',
-            sourcePath: '',
-            attachments: [],
-            privateOnly: false,
-          };
-          const queued = { record, recipients: choose() };
-          await outbox!.save(queued);
-          pendingPost = queued;
-          text.readOnly = true;
-        }
-        try {
-          await content!.share(pendingPost.record, pendingPost.recipients);
-          await identity!.waitForKeyBackup();
-        } catch (error) {
-          render();
-          throw error;
-        }
-        await outbox!.clear();
-        pendingPost = null;
-        text.value = '';
-        await refresh();
-        tell('Shared with the people you selected. Recovery backup checked.');
-      },
-      'form-action',
-    ),
-  );
   parent.append(c);
 }
 function memories(parent: HTMLElement): void {
   const c = card('Your memories, brought home');
+  if (archiveLoading)
+    c.append(
+      el(
+        'p',
+        'Opening available memories… Your account controls remain available.',
+        'notice-inline',
+      ),
+    );
   const overflow = content!.archiveOverflow();
   if (selectedArchivePart !== null) {
     c.append(
@@ -670,7 +1112,16 @@ function memories(parent: HTMLElement): void {
   );
   const input = field(c, 'archive-files', 'Choose archive ZIP files', 'file');
   input.multiple = true;
+  input.disabled = archiveLoading;
   input.accept = '.zip,application/zip';
+  if (importFiles.length) {
+    const transfer = new DataTransfer();
+    for (const file of importFiles) transfer.items.add(file);
+    input.files = transfer.files;
+  }
+  input.onchange = () => {
+    importFiles = [...(input.files || [])];
+  };
   c.append(
     el(
       'p',
@@ -682,6 +1133,8 @@ function memories(parent: HTMLElement): void {
     button(
       'Bring in my memories',
       async () => {
+        if (archiveLoading)
+          throw new Error('Wait for the current memories to finish opening, then import.');
         if (!input.files?.length) throw new Error('Choose an archive ZIP first.');
         const controller = new AbortController();
         const progress = el('aside', '', 'import-progress');
@@ -697,14 +1150,17 @@ function memories(parent: HTMLElement): void {
         let count = 0,
           accepted = 0,
           confirmed = 0;
+        let counts: ImportCounts | undefined;
         const warnings = new Set<string>();
         try {
           for await (const batch of importArchiveBatches([...input.files], {
             signal: controller.signal,
-            onProgress: (p) =>
+            onProgress: (p) => {
+              counts = p.counts;
               tell(
-                `Reading privately: ${p.records} memories · ${Math.round(p.decodedBytes / 1024 / 1024)} MiB read`,
-              ),
+                `Reading privately: ${p.records} memories · ${p.counts?.messages.imported || 0} messages · ${Math.round(p.decodedBytes / 1024 / 1024)} MiB read`,
+              );
+            },
           })) {
             for (const warning of batch.warnings) warnings.add(warning);
             if (!batch.records.length) continue;
@@ -716,18 +1172,22 @@ function memories(parent: HTMLElement): void {
             await identity!.waitForKeyBackup();
             confirmed++;
           }
-          await refresh();
+          importFiles = [];
+          archiveDownloadView = undefined;
+          await refresh({ archives: true });
           tell(
-            `${count} memories imported privately in ${accepted} parts. Recovery checked.${warnings.size ? ` ${[...warnings].join(' ')}` : ''}`,
+            `${count} memories imported privately in ${accepted} parts. Recovery checked.${counts ? ` ${counts.messages.imported} messages; ${counts.attachments.imported} attachments. Skipped: ${counts.records.skipped} records, ${counts.messages.skipped} messages, ${counts.attachments.skipped} attachments; ${counts.attachments.missing} attachment references missing from the download.` : ''}${warnings.size ? ` ${[...warnings].join(' ')}` : ''}`,
           );
         } catch (error) {
+          archiveDownloadView = undefined;
+          render();
           const reason = controller.signal.aborted
             ? 'Import stopped.'
             : error instanceof Error
               ? error.message
               : 'Import did not finish.';
           throw new Error(
-            `${reason} ${accepted} parts saved; recovery confirmed for ${confirmed}. Keep this browser and your original ZIP files. Choose the same files to resume; saved parts are checked before another upload.`,
+            `${reason} ${accepted} parts saved; recovery confirmed for ${confirmed}. Keep this browser and your original ZIP files.${error instanceof ArchiveHistoryUnavailable ? '' : ' Choose the same files to resume; saved parts are checked before another upload.'}`,
           );
         } finally {
           progress.remove();
@@ -762,6 +1222,10 @@ function memories(parent: HTMLElement): void {
         ? 'Download visible memories'
         : 'Download my archive',
       async () => {
+        if (archiveLoading || !archiveLoaded)
+          throw new Error(
+            'Wait for these memories to finish opening, or download a saved import separately below.',
+          );
         try {
           download(await exportArchives(records), 'clean-bookface-memories.zip');
         } catch (error) {
@@ -811,15 +1275,21 @@ function memories(parent: HTMLElement): void {
     button(
       'Search every saved import',
       async () => {
+        const controller = identity!,
+          store = content!,
+          box = outbox!;
         const query = search.value;
-        const found = await content!.searchArchive(search.value, 50, (n) =>
-          tell(`Searching privately: ${n} saved parts checked…`),
-        );
+        const found = await store.searchArchive(query, 50, (n) => {
+          if (identity === controller && content === store)
+            tell(`Searching privately: ${n} saved parts checked…`);
+        });
+        assertCurrent(controller, store, box);
+        if (!results.isConnected) return;
         results.replaceChildren();
         results.append(
           el(
             'p',
-            `${found.matches.length} matches${found.limited ? ' (showing the first 50)' : ''}. Repeated imports can contain the same memory.`,
+            `${found.matches.length} matches${found.limited ? ' (search incomplete)' : ''}. Repeated imports can contain the same memory.`,
             'help',
           ),
         );
@@ -830,9 +1300,7 @@ function memories(parent: HTMLElement): void {
             button(
               'Open this saved part',
               async () => {
-                records = await content!.readArchiveBatch(hit.roomId, hit.eventId);
-                selectedArchivePart = 0;
-                render();
+                await openSavedPart(store, controller, box, hit.roomId, hit.eventId, 0);
                 const search = app.querySelector<HTMLInputElement>('#memory-search');
                 if (search) {
                   search.value = query;
@@ -847,7 +1315,7 @@ function memories(parent: HTMLElement): void {
         }
         tell(
           found.limited
-            ? 'Search stopped at 50 matches. Narrow your words to find a particular memory.'
+            ? 'Search is incomplete. Try more specific words and check any unavailable saved parts using your recovery kit or the separate downloads.'
             : `Search complete: ${found.partsChecked} saved parts checked.`,
         );
       },
@@ -855,9 +1323,40 @@ function memories(parent: HTMLElement): void {
     ),
   );
 }
+async function openSavedPart(
+  store: ContentStore,
+  controller: Identity,
+  box: BrowserOutbox,
+  roomId: string,
+  eventId: string,
+  number: number,
+): Promise<void> {
+  assertCurrent(controller, store, box);
+  const part = await store.readArchiveBatch(roomId, eventId);
+  assertCurrent(controller, store, box);
+  // An earlier refresh must not replace the part explicitly opened by the reader.
+  refreshGeneration++;
+  records = part;
+  selectedArchivePart = number;
+  archiveLoaded = true;
+  archiveLoading = false;
+  archiveError = '';
+  section = 'memories';
+  render();
+}
 function archiveDownloads(parent: HTMLElement, expanded: boolean): void {
+  const controller = identity!,
+    store = content!,
+    box = outbox!;
+  if (archiveDownloadView?.store !== store)
+    archiveDownloadView = { store, batches: [], listed: false, loading: false, open: expanded };
+  const view = archiveDownloadView;
   const details = el('details');
-  details.open = expanded;
+  details.id = 'saved-import-downloads';
+  details.open = view.open;
+  details.ontoggle = () => {
+    if (details.isConnected && archiveDownloadView === view) view.open = details.open;
+  };
   details.append(
     el('summary', 'Download my saved imports separately'),
     el(
@@ -867,20 +1366,37 @@ function archiveDownloads(parent: HTMLElement, expanded: boolean): void {
     ),
   );
   const list = el('div');
-  let cursor: string | undefined;
-  let count = 0;
   const more = button('Show saved imports', async () => {
-    const page = await content!.archiveBatches(cursor);
-    for (const batch of page.batches) {
-      const number = ++count;
+    assertCurrent(controller, store, box);
+    if (view.loading) return;
+    view.loading = true;
+    draw();
+    try {
+      const page = await store.archiveBatches(view.cursor, 50, true);
+      assertCurrent(controller, store, box);
+      const seen = new Set(view.batches.map((batch) => `${batch.roomId}\0${batch.eventId}`));
+      view.batches.push(
+        ...page.batches.filter((batch) => !seen.has(`${batch.roomId}\0${batch.eventId}`)),
+      );
+      view.cursor = page.nextCursor;
+      view.listed = true;
+    } finally {
+      view.loading = false;
+      if (identity === controller && content === store && archiveDownloadView === view) {
+        if (list.isConnected) draw();
+        else render();
+      }
+    }
+  });
+  function draw(): void {
+    list.replaceChildren();
+    for (const [index, batch] of view.batches.entries()) {
+      const number = index + 1;
       list.append(
         button(
           `View saved import ${number}`,
           async () => {
-            records = await content!.readArchiveBatch(batch.roomId, batch.eventId);
-            selectedArchivePart = number;
-            section = 'memories';
-            render();
+            await openSavedPart(store, controller, box, batch.roomId, batch.eventId, number);
             tell(`Opened saved import ${number}. Nothing was shared.`);
           },
           'secondary form-action',
@@ -888,21 +1404,27 @@ function archiveDownloads(parent: HTMLElement, expanded: boolean): void {
         button(
           `Download saved import ${number}`,
           async () => {
-            download(
-              await content!.downloadArchiveBatch(batch.roomId, batch.eventId),
-              `clean-bookface-memories-part-${number}.zip`,
-            );
+            assertCurrent(controller, store, box);
+            const data = await store.downloadArchiveBatch(batch.roomId, batch.eventId);
+            assertCurrent(controller, store, box);
+            download(data, `clean-bookface-memories-part-${number}.zip`);
             tell('Saved import downloaded. Keep every part somewhere private.');
           },
           'secondary form-action',
         ),
       );
     }
-    cursor = page.nextCursor;
-    more.textContent = cursor ? 'Show more saved imports' : 'All saved imports are listed';
-    more.disabled = !cursor;
-    if (!count) list.append(el('p', 'No saved imports yet.', 'help'));
-  });
+    more.textContent = view.loading
+      ? 'Opening saved imports…'
+      : !view.listed
+        ? 'Show saved imports'
+        : view.cursor
+          ? 'Show more saved imports'
+          : 'All saved imports are listed';
+    more.disabled = view.loading || (view.listed && !view.cursor);
+    if (view.listed && !view.batches.length) list.append(el('p', 'No saved imports yet.', 'help'));
+  }
+  draw();
   details.append(list, more);
   parent.append(details);
 }
@@ -914,19 +1436,30 @@ function recordCard(
   shared?: SharedPost,
 ): HTMLElement {
   const c = el('article', '', 'card');
+  c.dataset.focusScope = shared ? `post:${shared.roomId}:${shared.id}` : `memory:${record.id}`;
   const head = el('div', '', 'post-head');
   head.append(
     el('strong', sender),
     el(
       'span',
-      record.timestamp
-        ? new Date(record.timestamp).toLocaleString()
-        : sentAt
-          ? new Date(sentAt).toLocaleString()
-          : 'Date unknown',
+      shared
+        ? `Shared ${new Date(shared.sharedAt).toLocaleString()}`
+        : record.timestamp
+          ? new Date(record.timestamp).toLocaleString()
+          : sentAt
+            ? new Date(sentAt).toLocaleString()
+            : 'Date unknown',
     ),
   );
   c.append(head);
+  if (
+    shared &&
+    shared.originalTimestamp &&
+    Math.abs(shared.sharedAt - shared.originalTimestamp) > 60_000
+  )
+    c.append(
+      el('p', `Original memory: ${new Date(shared.originalTimestamp).toLocaleString()}`, 'help'),
+    );
   if (record.title) c.append(el('p', record.title, 'post-title'));
   if (record.conflictOf)
     c.append(el('p', 'Another saved version of this memory. Both copies are kept.', 'help'));
@@ -944,6 +1477,61 @@ function recordCard(
     } else media.append(el('p', `${a.mimeType} attachment · included in your download`, 'help'));
   }
   c.append(media);
+  if (shared && !shared.mediaLoaded && shared.media?.length) {
+    const store = content!;
+    let loading = false;
+    const loadMedia = async () => {
+      if (!c.isConnected || content !== store) return;
+      if (loading) return;
+      loading = true;
+      load.disabled = true;
+      try {
+        const hydrated = await store.hydratePost(shared);
+        if (!c.isConnected || content !== store) return;
+        const index = feed.findIndex(
+          (post) => post.roomId === shared.roomId && post.id === shared.id,
+        );
+        if (index >= 0) feed[index] = hydrated;
+        for (const photo of hydrated.record.attachments) {
+          const img = el('img');
+          const url = URL.createObjectURL(photo.bytes);
+          objectUrls.push(url);
+          img.src = url;
+          img.alt = hydrated.record.title || 'Shared photo';
+          img.loading = 'lazy';
+          media.append(img);
+        }
+        load.remove();
+      } catch {
+        loading = false;
+        load.disabled = false;
+        load.textContent = 'Retry opening photos';
+        media.append(
+          el(
+            'p',
+            'These photos could not be verified or downloaded. The text remains available.',
+            'help',
+          ),
+        );
+      }
+    };
+    const load = button(`Show ${shared.media.length} photos`, loadMedia, 'small secondary');
+    c.append(load);
+    // Each visible card fetches only its own authenticated media. Other pages remain unopened.
+    mediaObserver ??= new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries)
+          if (entry.isIntersecting) {
+            mediaObserver?.unobserve(entry.target);
+            const target = entry.target as HTMLButtonElement & { loadMedia?: () => Promise<void> };
+            void target.loadMedia?.();
+          }
+      },
+      { rootMargin: '100px' },
+    );
+    (load as HTMLButtonElement & { loadMedia?: () => Promise<void> }).loadMedia = loadMedia;
+    mediaObserver.observe(load);
+  }
   if (shared) conversation(c, shared);
   if (privateRecord) {
     c.append(el('span', 'Private · only you', 'pill'));
@@ -956,9 +1544,7 @@ function recordCard(
           'Share selected copy',
           async () => {
             if (!choose().length) throw new Error('Choose at least one friend.');
-            await content!.share(record, choose());
-            await identity!.waitForKeyBackup();
-            tell('Shared a separate copy. Your original is still private.');
+            await queuePost(record, choose());
           },
           'small form-action',
         ),
@@ -969,42 +1555,66 @@ function recordCard(
   return c;
 }
 async function queueSocial(post: SharedPost, action: SocialAction): Promise<void> {
+  const controller = identity!,
+    store = content!,
+    box = outbox!;
   if (pendingSocial) throw new Error('Finish or stop the waiting conversation change first.');
   const queued: PendingSocial = {
     post: { roomId: post.roomId, id: post.id, sender: post.sender },
     operationId: crypto.randomUUID(),
     action,
   };
-  await outbox!.saveSocial(queued);
+  await box.saveSocial(queued);
+  assertCurrent(controller, store, box);
   pendingSocial = queued;
   await finishSocial();
 }
 async function finishSocial(): Promise<void> {
   if (!pendingSocial) return;
-  const { post, action, operationId } = pendingSocial;
+  const queued = pendingSocial;
+  const { post, action, operationId } = queued;
+  const controller = identity!,
+    store = content!,
+    box = outbox!;
+  const current = () => {
+    assertCurrent(controller, store, box);
+    if (pendingSocial !== queued) throw new Error('This waiting change has changed.');
+  };
   try {
-    if (action.kind === 'comment') await content!.addComment(post, action.text, operationId);
+    if (action.kind === 'comment') await store.addComment(post, action.text, operationId);
     else if (action.kind === 'remove-comment')
-      await content!.removeComment(post, action.commentId, operationId);
+      await store.removeComment(post, action.commentId, operationId);
     else if (action.kind === 'reaction')
-      await content!.setReaction(post, action.reaction, operationId);
-    else await content!.removePost(post, operationId);
-    await identity!.waitForKeyBackup();
-    await outbox!.clear('social');
+      await store.setReaction(post, action.reaction, operationId);
+    else await store.removePost(post, operationId);
+    current();
+    await controller.waitForKeyBackup();
+    current();
+    await box.clear('social');
+    current();
     pendingSocial = null;
     await refresh();
+    assertCurrent(controller, store, box);
     tell('Conversation updated. Recovery backup checked.');
   } catch (error) {
-    render();
+    if (identity === controller && content === store) render();
     throw error;
   }
 }
 function conversation(c: HTMLElement, post: SharedPost): void {
   const friend =
-    content!.friendRooms().find((r) => r.roomId === post.roomId)?.userId || post.sender;
+    content!.conversationRooms().find((r) => r.roomId === post.roomId)?.userId || post.sender;
   c.append(
     el('p', `A conversation between you and ${friend}. Replies stay in this conversation.`, 'help'),
   );
+  if (post.readOnly)
+    c.append(
+      el(
+        'p',
+        'Saved conversation · this friendship has ended. You can read and download available history; new replies and sharing are closed.',
+        'notice-inline',
+      ),
+    );
   const actions = el('div', '', 'post-actions');
   const reaction = el('select');
   reaction.setAttribute('aria-label', 'Your reaction');
@@ -1038,13 +1648,13 @@ function conversation(c: HTMLElement, post: SharedPost): void {
         'small danger',
       ),
     );
-  c.append(actions);
+  if (!post.readOnly) c.append(actions);
   for (const r of post.reactions) c.append(el('p', `${r.reaction} ${r.sender}`, 'help'));
   const comments = el('div', '', 'comments');
   for (const comment of post.comments) {
     const row = el('div', '', 'comment');
     row.append(el('strong', comment.sender), el('p', comment.text, 'post-body'));
-    if (comment.sender === identity!.session.userId)
+    if (!post.readOnly && comment.sender === identity!.session.userId)
       row.append(
         button(
           'Remove my comment',
@@ -1059,14 +1669,15 @@ function conversation(c: HTMLElement, post: SharedPost): void {
   reply.maxLength = 4000;
   reply.setAttribute('aria-label', 'Write a comment');
   reply.placeholder = 'Say something to your friend…';
-  c.append(
-    reply,
-    button(
-      'Send comment',
-      () => queueSocial(post, { kind: 'comment', text: reply.value }),
-      'small form-action',
-    ),
-  );
+  if (!post.readOnly)
+    c.append(
+      reply,
+      button(
+        'Send comment',
+        () => queueSocial(post, { kind: 'comment', text: reply.value }),
+        'small form-action',
+      ),
+    );
   if (post.sender !== identity!.session.userId) {
     const report = el('details');
     report.append(el('summary', 'Report this post'));
@@ -1132,7 +1743,17 @@ function friends(parent: HTMLElement): void {
   const list = el('ul', '', 'friends-list');
   for (const friend of content!.friendRooms()) {
     const li = el('li');
-    li.append(el('p', friend.userId));
+    li.append(
+      el('p', friend.userId),
+      el(
+        'p',
+        verifiedFriends.has(friend.userId)
+          ? 'Identity checked'
+          : 'Identity not checked yet — compare together before sharing.',
+        'help',
+      ),
+    );
+    li.dataset.focusScope = `friend:${friend.userId}`;
     const row = el('div', '', 'row');
     row.append(
       button(
@@ -1147,7 +1768,7 @@ function friends(parent: HTMLElement): void {
         'Remove friend',
         async () => {
           await content!.revokeFriend(friend.userId);
-          render();
+          await refresh();
           tell('Removed. They keep copies you already shared; new posts will not go to them.');
         },
         'small danger',
@@ -1177,9 +1798,18 @@ function friends(parent: HTMLElement): void {
     pending.append(
       el('p', inviter),
       button('Accept friend invitation', async () => {
-        await content!.acceptInvite(room.roomId);
-        render();
-        tell('Accepted. Check their identity before sharing.');
+        const controller = identity!,
+          store = content!,
+          box = outbox!;
+        await store.acceptInvite(room.roomId);
+        assertCurrent(controller, store, box);
+        await refresh();
+        assertCurrent(controller, store, box);
+        tell(
+          verifiedFriends.has(inviter)
+            ? 'Accepted. Your earlier identity check still matches.'
+            : 'Accepted. Check their identity before sharing.',
+        );
       }),
       button(
         'Decline invitation',
@@ -1240,6 +1870,7 @@ function account(parent: HTMLElement): void {
       () => {
         section = 'memories';
         render();
+        if (!archiveLoaded) void refresh({ archives: true });
       },
       'secondary',
     ),
@@ -1250,15 +1881,108 @@ function account(parent: HTMLElement): void {
       'Downloaded archives are readable files. Keep them private. Before signing out, make sure your recovery kit is saved.',
       'help',
     ),
+    button('Use my recovery kit again', () => recovery(true), 'secondary'),
     button('Sign out of this browser', signOut, 'secondary'),
   );
   parent.append(c);
+  const conversations = card('Take your conversations with you');
+  conversations.append(
+    el(
+      'p',
+      'Download posts, photos and replies from each conversation, including your own posts and earlier copies marked removed. Removing a post or reply from the feed does not erase it from this history. Ended friendships remain available when this browser can still verify and decrypt their history. These ZIP files are readable without a recovery kit; keep them private.',
+    ),
+  );
+  const rooms = content!.conversationRooms();
+  if (!rooms.length) conversations.append(el('p', 'No saved conversations yet.', 'help'));
+  let downloads = conversationDownloads.get(content!);
+  if (!downloads) {
+    downloads = new Map();
+    conversationDownloads.set(content!, downloads);
+  }
+  for (const room of rooms) {
+    const controller = identity!,
+      store = content!,
+      box = outbox!;
+    const row = el('div', '', 'conversation-download');
+    row.dataset.focusScope = `export:${room.roomId}`;
+    row.append(
+      el('h3', room.userId),
+      el('p', room.readOnly ? 'Saved history · friendship ended' : 'Current conversation', 'help'),
+    );
+    let state = downloads.get(room.roomId);
+    if (!state) {
+      state = { part: 1, complete: false, loading: false };
+      downloads.set(room.roomId, state);
+    }
+    const progress = state;
+    const label = () =>
+      progress.loading
+        ? 'Preparing conversation download…'
+        : progress.complete
+          ? 'All available parts downloaded'
+          : `Download conversation · part ${progress.part}`;
+    const save = button(
+      label(),
+      async () => {
+        assertCurrent(controller, store, box);
+        if (progress.loading || progress.complete) return;
+        progress.loading = true;
+        save.disabled = true;
+        save.textContent = label();
+        try {
+          const result = await store.exportConversationPage(room.roomId, progress.cursor);
+          assertCurrent(controller, store, box);
+          download(result.blob, `clean-bookface-conversation-part-${progress.part}.zip`);
+          progress.cursor = result.nextCursor;
+          progress.part++;
+          progress.complete = !progress.cursor;
+          const unavailable = store
+            .unavailableContent()
+            .filter((item) => item.roomId === room.roomId).length;
+          tell(
+            `${progress.cursor ? 'Download saved. Continue with the next part to keep the rest.' : 'Every available part of this conversation has been offered for download.'}${unavailable ? ` ${unavailable} events could not be opened; the download includes an explanation. Keep your recovery kit and original backups.` : ''}`,
+          );
+        } finally {
+          progress.loading = false;
+          if (content === store && identity === controller && outbox === box) {
+            if (save.isConnected) {
+              save.disabled = progress.complete;
+              save.textContent = label();
+            } else if (section === 'account') render();
+          }
+        }
+      },
+      'secondary form-action',
+    );
+    save.disabled = progress.loading || progress.complete;
+    row.append(
+      save,
+      button(
+        'Start this conversation download again',
+        () => {
+          assertCurrent(controller, store, box);
+          if (progress.loading) return;
+          progress.cursor = undefined;
+          progress.part = 1;
+          progress.complete = false;
+          save.disabled = false;
+          save.textContent = 'Download conversation · part 1';
+          tell(
+            'Ready to download from the beginning. Keep each part until the complete conversation is saved.',
+          );
+        },
+        'small secondary',
+      ),
+    );
+    conversations.append(row);
+  }
+  parent.append(conversations);
   const close = el('details', '', 'card');
   close.append(el('summary', 'Close my account'));
   close.append(
     el(
       'p',
-      'Download your memories first. Closing removes account access and this browser’s keys, and asks your home to erase your profile. Friends may keep shared copies; encrypted events, media and backups can remain on hosts until their retention policy removes them. Contact your host about retained storage.',
+      'Download your memories and every conversation part first. Closing removes account access and this browser’s keys, and asks your home to erase your profile. Friends may keep shared copies; encrypted events, media and backups can remain on hosts until their retention policy removes them. Contact your host about retained storage.',
     ),
   );
   const confirmation = field(
@@ -1290,19 +2014,26 @@ async function signOut(): Promise<void> {
       'A post is waiting to finish sending. Open News feed and retry before signing out.',
     );
   if (identity) {
-    const keys = await identity.client.getCrypto()!.exportRoomKeys();
-    const hasKeys = keys.length > 0;
-    for (const key of keys) key.session_key = '';
-    if (hasKeys) {
-      tell('Checking your recovery backup before signing out…');
-      await identity.waitForKeyBackup();
+    try {
+      const keys = await identity.client.getCrypto()!.exportRoomKeys();
+      const hasKeys = keys.length > 0;
+      for (const key of keys) key.session_key = '';
+      if (hasKeys) {
+        tell('Checking your recovery backup before signing out…');
+        await identity.waitForKeyBackup();
+      }
+    } catch (error) {
+      // An already-ended server session cannot upload keys. Other failures
+      // retain this browser's keys and sign-in so recovery can be retried.
+      if (!Identity.sessionIsInvalid(error)) throw error;
+      showOpenFailure(identity.session, error);
+      return;
     }
-    await identity.client.logout(true);
+    await Identity.logoutSession(identity.session);
   }
   await exitLocally('Signed out. This browser’s keys have been removed.');
 }
-async function exitLocally(message: string): Promise<void> {
-  const session = identity!.session;
+async function exitLocally(message: string, session: Session = identity!.session): Promise<void> {
   // The in-memory scope exists before storage is touched. A full localStorage
   // must never prevent stopping a logged-out client or deleting its crypto keys.
   pendingCleanup = {
@@ -1327,7 +2058,7 @@ async function exitLocally(message: string): Promise<void> {
     // this tab open, since a storage failure prevents a durable retry journal.
   }
   try {
-    identity!.close();
+    identity?.close();
   } finally {
     outbox?.close();
     outbox = undefined;
@@ -1335,11 +2066,30 @@ async function exitLocally(message: string): Promise<void> {
     content = undefined;
     records = [];
     feed = [];
+    feedCursor = undefined;
+    selectedConversation = undefined;
+    feedLimited = false;
+    updateVersion = 0;
+    updatesAvailable = false;
     pendingPost = null;
     pendingSocial = null;
     loginPassword = '';
     currentVerification = '';
+    friendChecksReady = false;
+    cancelCurrentVerification = undefined;
     selectedArchivePart = null;
+    archiveLoaded = false;
+    archiveLoading = false;
+    archiveError = '';
+    archiveDownloadView = undefined;
+    feedError = '';
+    refreshGeneration++;
+    verifiedFriends.clear();
+    draftText = '';
+    draftPhotos = [];
+    importFiles = [];
+    draftRecipients.clear();
+    verification.close();
     verification.replaceChildren();
     clear();
   }
@@ -1374,6 +2124,9 @@ async function finishCleanup(): Promise<void> {
     const results = await Promise.allSettled([
       forgetDeviceCrypto(scope),
       BrowserOutbox.forgetSession(scope),
+      Promise.resolve().then(() => Identity.forgetVerificationHistory(scope)),
+      Promise.resolve().then(() => Identity.forgetRecoveryProgress(scope)),
+      cleanupImportTemporaryFiles(),
       Promise.resolve().then(() => removeMatchingSession(scope)),
     ]);
     if (results.some((result) => result.status === 'rejected'))
@@ -1392,7 +2145,7 @@ async function finishCleanup(): Promise<void> {
     c.append(
       el(
         'p',
-        'Server sign-out or account closure has finished. Local keys or sign-in storage could not all be removed. Keep this tab open, close other tabs for this app, then retry. If browser storage stays blocked, clear this app’s site data in your browser settings.',
+        'Local keys or sign-in storage could not all be removed. Keep this tab open, close other tabs for this app, then retry. If browser storage stays blocked, clear this app’s site data in your browser settings.',
       ),
       button('Retry local key removal', finishCleanup),
     );
@@ -1401,6 +2154,15 @@ async function finishCleanup(): Promise<void> {
   }
 }
 function showVerification(view: VerificationView): void {
+  if (!friendChecksReady) {
+    if (view.phase !== 'done' && view.phase !== 'cancelled') {
+      // Never let an incoming (including inherited) request obscure recovery.
+      // A transport failure cannot grant trust or make a modal block the kit.
+      void view.cancel().catch(() => {});
+      tell('Open your memories first, then start a new identity check together.');
+    }
+    return;
+  }
   const update = verificationUpdate(currentVerification, view);
   if (update === 'ignore') return;
   if (update === 'busy') {
@@ -1408,17 +2170,21 @@ function showVerification(view: VerificationView): void {
     return;
   }
   currentVerification = view.id;
+  cancelCurrentVerification = view.cancel;
   verification.replaceChildren();
   const c = card('Make sure it’s your friend');
   c.append(el('p', view.peer));
   if (view.phase === 'done' || view.phase === 'cancelled') {
     currentVerification = '';
+    cancelCurrentVerification = undefined;
+    verification.close();
     verification.replaceChildren();
     tell(
       view.phase === 'done'
         ? 'Identity checked. You can now share.'
         : `Identity check cancelled${view.cancellationCode ? ` (${view.cancellationCode})` : ''}. Nothing was shared. Start one new check together.`,
     );
+    if (view.phase === 'done') void refresh();
     return;
   }
   c.append(
@@ -1442,7 +2208,11 @@ function showVerification(view: VerificationView): void {
     c.append(
       el(
         'p',
-        view.phase === 'requested' ? 'Waiting for your friend to accept…' : 'Ready to compare.',
+        view.phase === 'confirming'
+          ? 'Finishing the identity check…'
+          : view.phase === 'requested'
+            ? 'Waiting for your friend to accept…'
+            : 'Ready to compare.',
         'help',
       ),
     );
@@ -1453,13 +2223,147 @@ function showVerification(view: VerificationView): void {
   if (view.mismatch) row.append(button('They don’t match', view.mismatch, 'danger'));
   row.append(button('Cancel', view.cancel, 'secondary'));
   c.append(row);
+  const title = c.querySelector('h2')!;
+  title.id = 'verification-title';
+  title.tabIndex = -1;
+  verification.setAttribute('aria-labelledby', title.id);
+  verification.oncancel = (event) => {
+    event.preventDefault();
+    void view
+      .cancel()
+      .catch(() => tell('The identity check could not be cancelled yet. Try again.', true));
+  };
+  verification.onkeydown = (event) => {
+    if (event.key !== 'Tab') return;
+    const controls = [
+      ...verification.querySelectorAll<HTMLElement>(
+        'button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]',
+      ),
+    ].filter((node) => !node.hidden && node.getClientRects().length);
+    if (!controls.length) {
+      event.preventDefault();
+      title.focus();
+      return;
+    }
+    const first = controls[0],
+      last = controls[controls.length - 1];
+    if (
+      event.shiftKey &&
+      (document.activeElement === first ||
+        !controls.includes(document.activeElement as HTMLElement))
+    ) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
   verification.append(c);
+  if (!verification.open) verification.showModal();
+  title.focus();
 }
+function showOpenFailure(saved: Session, error: unknown): void {
+  friendChecksReady = false;
+  cancelCurrentVerification = undefined;
+  currentVerification = '';
+  verification.close();
+  verification.replaceChildren();
+  outbox?.close();
+  outbox = undefined;
+  identity?.close();
+  identity = undefined;
+  content = undefined;
+  archiveDownloadView = undefined;
+  clear();
+  const ended = Identity.sessionIsInvalid(error);
+  const c = card(ended ? 'Your home has ended this browser session' : 'Your book could not open');
+  c.classList.add('narrow');
+  const endConfirmation = el('input');
+  endConfirmation.type = 'checkbox';
+  endConfirmation.id = 'confirm-ended-session-removal';
+  const endLabel = el('label', '', 'check');
+  endLabel.append(
+    endConfirmation,
+    document.createTextNode(
+      'I understand that keys not backed up will be lost when I remove this ended session.',
+    ),
+  );
+  c.append(
+    el('p', error instanceof Error ? error.message : 'Try again.', 'error-text'),
+    button('Try again', () => location.reload()),
+    ...(error instanceof SessionInUseError
+      ? [
+          el(
+            'p',
+            'Close the other tab for this account, then try again. Its sign-in and keys have been kept intact.',
+          ),
+        ]
+      : [
+          el(
+            'p',
+            'Ending this browser session removes its local keys and unsent changes. Keys that were not backed up will be lost; your recovery kit cannot restore memories that need those keys. Keep your original downloads.',
+          ),
+          ...(ended ? [endLabel] : []),
+          button(
+            'End this browser session',
+            async () => {
+              if (ended && !endConfirmation.checked)
+                throw new Error('Confirm the key-loss warning before removing this ended session.');
+              await Identity.logoutSession(saved);
+              await exitLocally('Signed out. This browser’s keys have been removed.', saved);
+            },
+            'secondary',
+          ),
+        ]),
+  );
+  if (!(error instanceof SessionInUseError)) {
+    const local = el('details');
+    local.append(
+      el('summary', 'Remove this browser’s keys without contacting the home'),
+      el(
+        'p',
+        'This removes this browser’s keys, saved sign-in and unsent changes. Keys not already backed up will be lost; your recovery kit cannot recover memories that need those keys. It does not end the session on your home: that device may remain active there. You will need your recovery kit to recover available saved content when you sign in again. Keep your original downloads.',
+      ),
+    );
+    const confirm = el('input');
+    confirm.type = 'checkbox';
+    confirm.id = 'confirm-local-key-removal';
+    const label = el('label', '', 'check');
+    label.append(
+      confirm,
+      document.createTextNode(
+        'I understand that unsent changes and keys not backed up will be lost. My recovery kit cannot restore them.',
+      ),
+    );
+    local.append(
+      label,
+      button(
+        'Remove local keys and sign-in',
+        async () => {
+          if (!confirm.checked)
+            throw new Error('Confirm the recovery warning before removing this browser’s keys.');
+          await exitLocally(
+            'This browser’s keys and sign-in have been removed. The session may still be active on your home.',
+            saved,
+          );
+        },
+        'danger',
+      ),
+    );
+    c.append(local);
+  }
+  app.append(c);
+}
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) location.reload();
+});
 window.addEventListener('pagehide', () => {
   identity?.close();
   outbox?.close();
 });
 void run(async () => {
+  void cleanupImportTemporaryFiles();
   let saved: Session | null;
   try {
     // Inspect the cleanup journal before touching any saved login. A blocked
@@ -1486,24 +2390,7 @@ void run(async () => {
     try {
       await openSession(saved);
     } catch (error) {
-      identity?.close();
-      identity = undefined;
-      clear();
-      const c = card('Your book could not open');
-      c.classList.add('narrow');
-      c.append(
-        el('p', error instanceof Error ? error.message : 'Try again.', 'error-text'),
-        button('Try again', () => location.reload()),
-        button(
-          'Sign in again',
-          () => {
-            localStorage.removeItem(SESSION);
-            login();
-          },
-          'secondary',
-        ),
-      );
-      app.append(c);
+      showOpenFailure(saved, error);
     }
   } else login();
 });

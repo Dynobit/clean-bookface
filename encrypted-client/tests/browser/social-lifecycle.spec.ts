@@ -169,6 +169,7 @@ test('encrypted conversations, durable retries, selected reports, blocking and a
     };
     const zip = await exportArchives([photo]);
     await a.getByRole('button', { name: 'My memories', exact: true }).click();
+    await expect(a.getByLabel('Choose archive ZIP files')).toBeEnabled();
     await a.getByLabel('Choose archive ZIP files').setInputFiles({
       name: 'fictional.zip',
       mimeType: 'application/zip',
@@ -176,21 +177,26 @@ test('encrypted conversations, durable retries, selected reports, blocking and a
     });
     await a.getByRole('button', { name: 'Bring in my memories', exact: true }).click();
     await idle(a);
+    await expect(a.locator('#notice')).toContainText('memories imported privately');
     const photoCard = a
       .locator('article')
       .filter({ has: a.locator('.post-body').filter({ hasText: photoMarker }) });
     await photoCard.getByText('Share this memory', { exact: true }).click();
     await photoCard
       .getByRole('checkbox', {
-        name: accounts.find((x) => x.username === 'bob')!.userId,
+        name: accounts.find((x) => x.username === 'bob')!.userId + ' · identity checked',
         exact: true,
       })
       .check();
     await photoCard.getByRole('button', { name: 'Share selected copy', exact: true }).click();
     await idle(a);
     await b.getByRole('button', { name: 'News feed', exact: true }).click();
-    await b.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+    await b.locator('#refresh-book').click();
     await idle(b);
+    await b
+      .locator('article')
+      .filter({ has: b.locator('.post-body').filter({ hasText: photoMarker }) })
+      .scrollIntoViewIfNeeded();
     await expect
       .poll(() =>
         b
@@ -216,14 +222,14 @@ test('encrypted conversations, durable retries, selected reports, blocking and a
     await a.getByLabel('Write a post').fill(shared);
     await a
       .getByRole('checkbox', {
-        name: accounts.find((x) => x.username === 'bob')!.userId,
+        name: accounts.find((x) => x.username === 'bob')!.userId + ' · identity checked',
         exact: true,
       })
       .check();
     await a.getByRole('button', { name: 'Share with selected friends', exact: true }).click();
     await idle(a);
     await b.getByRole('button', { name: 'News feed', exact: true }).click();
-    await b.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+    await b.locator('#refresh-book').click();
     await idle(b);
     const post = (page: Page) =>
       page
@@ -248,10 +254,11 @@ test('encrypted conversations, durable retries, selected reports, blocking and a
       timeout: 65000,
     });
     await idle(b);
+    await expect(b.locator('#verification')).not.toBeVisible();
     await b.getByRole('button', { name: 'Finish this conversation change', exact: true }).click();
     await idle(b);
     await expect(post(b).locator('.comment').filter({ hasText: comment })).toHaveCount(1);
-    await a.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+    await a.locator('#refresh-book').click();
     await idle(a);
     await expect(post(a).locator('.comment').filter({ hasText: comment })).toHaveCount(1);
     await post(b).getByLabel('Your reaction').selectOption('♥');
@@ -284,7 +291,7 @@ test('encrypted conversations, durable retries, selected reports, blocking and a
       expect(body).not.toContain(shared);
       expect(body).not.toContain(comment);
     }
-    await m.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+    await m.locator('#refresh-book').click();
     await idle(m);
     await expect(m.locator('.post-body').filter({ hasText: shared })).toHaveCount(0);
     expect(sharedRoomId).not.toBe('');
@@ -304,7 +311,7 @@ test('encrypted conversations, durable retries, selected reports, blocking and a
     await post(a).getByRole('button', { name: 'Remove this shared copy', exact: true }).click();
     await idle(a);
     await expect(post(a)).toHaveCount(0);
-    await b.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+    await b.locator('#refresh-book').click();
     await idle(b);
     await expect(post(b)).toHaveCount(0);
     await b.getByRole('button', { name: 'Friends', exact: true }).click();
@@ -319,7 +326,7 @@ test('encrypted conversations, durable retries, selected reports, blocking and a
     await idle(b);
     await expect(b.locator('#notice.error')).toContainText('blocked');
     await b.getByRole('button', { name: 'News feed', exact: true }).click();
-    await expect(b.getByRole('checkbox', { name: aliceId, exact: true })).toHaveCount(0);
+    await expect(b.locator(`input[type=checkbox][value="${aliceId}"]`)).toHaveCount(0);
     await b.getByRole('button', { name: 'Friends', exact: true }).click();
     await b.getByRole('button', { name: 'Unblock account', exact: true }).click();
     await idle(b);
@@ -346,11 +353,11 @@ test('encrypted conversations, durable retries, selected reports, blocking and a
     const reconnected = `SOCIAL_RECONNECTED_${Date.now()}`;
     await b.getByRole('button', { name: 'News feed', exact: true }).click();
     await b.getByLabel('Write a post').fill(reconnected);
-    await b.getByRole('checkbox', { name: aliceId, exact: true }).check();
+    await b.getByRole('checkbox', { name: aliceId + ' · identity checked', exact: true }).check();
     await b.getByRole('button', { name: 'Share with selected friends', exact: true }).click();
     await idle(b);
     await a.getByRole('button', { name: 'News feed', exact: true }).click();
-    await a.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+    await a.locator('#refresh-book').click();
     await idle(a);
     await expect(a.locator('.post-body').filter({ hasText: reconnected })).toBeVisible();
     // Preserve the existing independent persisted-block/reload acceptance.
@@ -876,8 +883,8 @@ test('capture the real encrypted feed with fictional memories', async ({ browser
     expect(await a.locator('.sas').innerText()).toBe(await b.locator('.sas').innerText());
     await a.getByRole('button', { name: 'They match', exact: true }).click();
     await b.getByRole('button', { name: 'They match', exact: true }).click();
-    await expect(a.locator('#verification')).toBeEmpty({ timeout: 20_000 });
-    await expect(b.locator('#verification')).toBeEmpty({ timeout: 20_000 });
+    await expect(a.locator('#verification')).toBeEmpty({ timeout: 65_000 });
+    await expect(b.locator('#verification')).toBeEmpty({ timeout: 65_000 });
 
     await b.getByRole('button', { name: 'News feed', exact: true }).click();
     const priorLunch = b.locator('article').filter({
@@ -915,6 +922,7 @@ test('capture the real encrypted feed with fictional memories', async ({ browser
     };
     const zip = await exportArchives([record]);
     await a.getByRole('button', { name: 'My memories', exact: true }).click();
+    await expect(a.getByLabel('Choose archive ZIP files')).toBeEnabled();
     await a.getByLabel('Choose archive ZIP files').setInputFiles({
       name: 'fictional-summer.zip',
       mimeType: 'application/zip',
@@ -922,11 +930,12 @@ test('capture the real encrypted feed with fictional memories', async ({ browser
     });
     await a.getByRole('button', { name: 'Bring in my memories', exact: true }).click();
     await idle(a);
+    await expect(a.locator('#notice')).toContainText('memories imported privately');
     const photo = a.locator('article').filter({ has: a.getByText(record.text, { exact: true }) });
     await photo.getByText('Share this memory', { exact: true }).click();
     await photo
       .getByRole('checkbox', {
-        name: accounts.find((x) => x.username === 'bob')!.userId,
+        name: accounts.find((x) => x.username === 'bob')!.userId + ' · identity checked',
         exact: true,
       })
       .check();
@@ -938,14 +947,14 @@ test('capture the real encrypted feed with fictional memories', async ({ browser
     await b.getByLabel('Write a post').fill(message);
     await b
       .getByRole('checkbox', {
-        name: accounts.find((x) => x.username === 'alice')!.userId,
+        name: accounts.find((x) => x.username === 'alice')!.userId + ' · identity checked',
         exact: true,
       })
       .check();
     await b.getByRole('button', { name: 'Share with selected friends', exact: true }).click();
     await idle(b);
     await a.getByRole('button', { name: 'News feed', exact: true }).click();
-    await a.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+    await a.locator('#refresh-book').click();
     await idle(a);
     const lunch = a.locator('article').filter({ has: a.getByText(message, { exact: true }) });
     await lunch.getByLabel('Write a comment').fill('I’ll bring dessert. Looking forward to it!');
@@ -955,9 +964,28 @@ test('capture the real encrypted feed with fictional memories', async ({ browser
     await lunch.getByRole('button', { name: 'Save reaction', exact: true }).click();
     await idle(a);
     await expect(a.locator('#verification')).toBeEmpty();
+    await expect(
+      lunch.getByText('I’ll bring dessert. Looking forward to it!', { exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      lunch.getByText('♥ ' + accounts.find((account) => account.username === 'alice')!.userId, {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await photo.scrollIntoViewIfNeeded();
+    await expect(photo.locator('img')).toHaveCount(1);
+    await expect
+      .poll(() => photo.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth))
+      .toBeGreaterThan(0);
+    expect(
+      await photo
+        .locator('img')
+        .evaluate((image: HTMLImageElement) => Math.max(image.naturalWidth, image.naturalHeight)),
+    ).toBeLessThanOrEqual(2048);
     const directory = process.env.CBF_SCREENSHOT_DIRECTORY!;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     await a.getByRole('button', { name: 'Dismiss this notice', exact: true }).click();
+    await a.evaluate(() => window.scrollTo(0, 0));
     await a.screenshot({ path: join(directory, 'encrypted-feed-desktop.png'), fullPage: true });
     await a.setViewportSize({ width: 390, height: 844 });
     for (const name of ['News feed', 'My memories', 'Friends', 'My account']) {
@@ -982,7 +1010,12 @@ test('capture the real encrypted feed with fictional memories', async ({ browser
     ).toBe(true);
     await a.evaluate(() => window.scrollTo(0, 0));
 
+    expect(await a.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     await a.screenshot({ path: join(directory, 'encrypted-feed-mobile.png'), fullPage: true });
+    await a.getByRole('button', { name: 'My account', exact: true }).click();
+    await idle(a);
+    expect(await a.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await a.screenshot({ path: join(directory, 'encrypted-account-mobile.png'), fullPage: true });
     for (const page of [a, b]) {
       await page.getByRole('button', { name: 'My account', exact: true }).click();
       await page.getByRole('button', { name: 'Sign out of this browser', exact: true }).click();

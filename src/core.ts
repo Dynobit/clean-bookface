@@ -75,7 +75,7 @@ export type DomainEvent = {
 };
 export type Notification = {
   id: string;
-  kind: 'post' | 'comment' | 'like' | 'friend.request' | 'friend.accept';
+  kind: 'post' | 'comment' | 'like' | 'friend.request' | 'friend.accept' | 'friend.failed';
   actor: string;
   actorName: string;
   postId?: string;
@@ -146,6 +146,7 @@ export class Core {
       CREATE TABLE IF NOT EXISTS appeals (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open', response TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, resolved_at INTEGER);
       CREATE TABLE IF NOT EXISTS rate_buckets (key TEXT PRIMARY KEY, started_at INTEGER NOT NULL, count INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS domain_events (id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor TEXT NOT NULL, recipient_actor TEXT NOT NULL, object_id TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL, acknowledged_at INTEGER, cancelled_at INTEGER);
+      CREATE TABLE IF NOT EXISTS domain_admission (sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE);
       CREATE INDEX IF NOT EXISTS domain_pending ON domain_events(acknowledged_at,cancelled_at,created_at);
       CREATE TABLE IF NOT EXISTS received_events (id TEXT NOT NULL, actor TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(id,actor));
       CREATE TABLE IF NOT EXISTS account_deletions (user_id TEXT PRIMARY KEY REFERENCES users(id), created_at INTEGER NOT NULL, archive_completed_at INTEGER);
@@ -374,13 +375,18 @@ export class Core {
     }
   }
   async login(username: string, password: string): Promise<Session & { token: string }> {
-    this.rate(`login:${username.toLowerCase()}`, 10, 15 * 60_000);
     if (typeof password !== 'string' || password.length > 1024)
       this.fail(401, 'Username or password is incorrect.');
     const row = this.one(
       'SELECT * FROM users WHERE username=? AND deleted=0',
       username.toLowerCase(),
     );
+    // Random nonexistent names must not consume every member's login budget.
+    // Keep their expensive dummy password work bounded separately; real names
+    // retain an account-specific brute-force limit. Unknown names cannot grow
+    // the durable bucket table without bound.
+    if (!row) this.rate('login:unknown', 60, 60_000);
+    else this.rate(`login:${username.toLowerCase()}`, 10, 15 * 60_000);
     const valid = row
       ? await verify(row.password_hash, password).catch(() => false)
       : (await hash(password || 'invalid password', ARGON), false);
@@ -482,9 +488,10 @@ export class Core {
     newPassword: string,
     signIn = false,
   ): Promise<AuthResult | SignedInAuthResult> {
-    this.rate(`recover:${username.toLowerCase()}`, 5, 60 * 60_000);
     this.password(newPassword);
     const user = this.userByName(username);
+    if (!user) this.rate('recover:unknown', 20, 60_000);
+    else this.rate(`recover:${username.toLowerCase()}`, 5, 60 * 60_000);
     if (
       !user ||
       !this.one(
@@ -646,7 +653,16 @@ export class Core {
       )
     );
   }
-  private makeRequest(from: string, to: string, remoteId?: string): string {
+  private makeRequest(from: string, to: string, remoteId?: string, remoteExpiry?: unknown): string {
+    if (
+      remoteExpiry !== undefined &&
+      (!Number.isSafeInteger(remoteExpiry) || (remoteExpiry as number) <= this.now())
+    )
+      this.fail(410, 'This friendship request has expired.');
+    const expiresAt = Math.min(
+      this.now() + 7 * DAY,
+      (remoteExpiry as number | undefined) ?? Infinity,
+    );
     const id = remoteId ?? randomUUID();
     this.validateActor(from);
     this.validateActor(to);
@@ -718,11 +734,11 @@ export class Core {
       id,
       from,
       to,
-      this.now() + 7 * DAY,
+      expiresAt,
       this.now(),
       this.now(),
     );
-    this.queue('friend.request', from, to, id, 1, { requestId: id, from, to });
+    this.queue('friend.request', from, to, id, 1, { requestId: id, from, to, expiresAt });
     this.notify(to, 'friend.request', from, id);
     return id;
   }
@@ -1155,6 +1171,18 @@ export class Core {
         this.run("UPDATE publications SET audience='selected' WHERE id=?", postId);
     });
   }
+  private purgeRemoteWithoutReaders(postId: string) {
+    const row = this.one('SELECT author_id FROM publications WHERE id=?', postId);
+    if (!row || row.author_id || this.audience(postId).length) return;
+    this.run("UPDATE publications SET body='',media_ids='[]' WHERE id=?", postId);
+    this.run(
+      'DELETE FROM comments WHERE post_id=? AND actor NOT IN (SELECT ? || username FROM users)',
+      postId,
+      `${this.origin}/users/`,
+    );
+    this.run("UPDATE comments SET body='' WHERE post_id=?", postId);
+    this.run('DELETE FROM likes WHERE post_id=?', postId);
+  }
   private revoke(postId: string, author: string, recipient: string, revision: number) {
     this.run(
       'UPDATE recipients SET revoked_at=? WHERE post_id=? AND actor=?',
@@ -1168,6 +1196,7 @@ export class Core {
       postId,
       recipient,
     );
+    this.purgeRemoteWithoutReaders(postId);
     this.queue('post.revoke', author, recipient, postId, revision + 1, { postId });
     this.run(
       'INSERT OR IGNORE INTO tombstones(object_id,actor,kind,created_at) VALUES(?,?,?,?)',
@@ -1430,6 +1459,8 @@ export class Core {
           return true;
         }
         const relationship = this.one('SELECT * FROM friendships WHERE id=?', row.source_id);
+        if (row.kind === 'friend.failed')
+          return relationship?.state === 'expired' && relationship.to_actor === user.actor;
         if (row.kind === 'friend.request')
           return (
             relationship?.state === 'pending' &&
@@ -1710,9 +1741,10 @@ export class Core {
     payload: Record<string, unknown>,
   ) {
     if (this.local(recipient)) return;
+    const eventId = randomUUID();
     this.run(
       'INSERT INTO domain_events(id,kind,actor,recipient_actor,object_id,revision,payload,created_at) VALUES(?,?,?,?,?,?,?,?)',
-      randomUUID(),
+      eventId,
       kind,
       actor,
       recipient,
@@ -1721,6 +1753,7 @@ export class Core {
       JSON.stringify(payload),
       this.now(),
     );
+    this.run('INSERT INTO domain_admission(event_id) VALUES(?)', eventId);
   }
   private queuePost(kind: string, postId: string, actor: string) {
     const post = this.one('SELECT * FROM publications WHERE id=?', postId)!;
@@ -1745,6 +1778,43 @@ export class Core {
       payload: JSON.parse(row.payload),
       createdAt: row.created_at,
     };
+  }
+  /** Prioritize recent admission independently of stuck retries. The legacy round-robin
+   * scan still advances older events, so continuous new arrivals cannot forget them.
+   * Consumed only in the transport admission transaction. */
+  takeNewEvents(limit = 100): DomainEvent[] {
+    const rows = this.all(
+      'SELECT event_id FROM domain_admission ORDER BY sequence DESC LIMIT ?',
+      Math.max(1, Math.min(limit, 100)),
+    );
+    const events: DomainEvent[] = [];
+    for (const row of rows) {
+      const event = this.outboundEvent(row.event_id);
+      if (event) events.push(event);
+      this.run('DELETE FROM domain_admission WHERE event_id=?', row.event_id);
+    }
+    return events;
+  }
+  rejectAcceptance(id: string) {
+    const event = this.one(
+      "SELECT * FROM domain_events WHERE id=? AND kind='friend.accept' AND acknowledged_at IS NULL",
+      id,
+    );
+    if (!event) return;
+    const request = this.one(
+      "SELECT * FROM friendships WHERE id=? AND state='accepted' AND from_actor=? AND to_actor=?",
+      event.object_id,
+      event.recipient_actor,
+      event.actor,
+    );
+    if (!request) return;
+    this.revokePair(request.from_actor, request.to_actor);
+    this.run(
+      "UPDATE friendships SET state='expired',updated_at=? WHERE id=?",
+      this.now(),
+      request.id,
+    );
+    this.notify(event.actor, 'friend.failed', event.recipient_actor, request.id);
   }
   pendingEvents(limit = 100, afterId = ''): DomainEvent[] {
     return this.all(
@@ -1818,7 +1888,14 @@ export class Core {
     } catch {
       return this.fail(400, `Invalid ${label}.`);
     }
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash)
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      url.search ||
+      url.href !== value
+    )
       this.fail(400, `Invalid ${label}.`);
     return value;
   }
@@ -1866,7 +1943,11 @@ export class Core {
     verifiedActor: string,
     activity: Record<string, any>,
   ): void {
-    const recipient = this.active(recipientUserId);
+    const removal = ['Delete', 'Remove', 'Block', 'Undo', 'Reject'].includes(activity.type);
+    const recipientRow = removal
+      ? this.one('SELECT * FROM users WHERE id=?', recipientUserId)
+      : undefined;
+    const recipient = recipientRow ? this.safeUser(recipientRow) : this.active(recipientUserId);
     this.validateActor(verifiedActor);
     if (this.local(verifiedActor))
       this.fail(403, 'Remote delivery cannot impersonate a local account.');
@@ -1902,7 +1983,7 @@ export class Core {
           100,
           60 * 60_000,
         );
-        this.makeRequest(verifiedActor, recipient.actor, eventId);
+        this.makeRequest(verifiedActor, recipient.actor, eventId, activity['cb:expiresAt']);
       } else if (type === 'Accept' || type === 'Reject') {
         const request = this.requestId(
           this.absolute(typeof object === 'string' ? object : object?.id, 'original request'),
@@ -1912,11 +1993,12 @@ export class Core {
           !row ||
           row.from_actor !== recipient.actor ||
           row.to_actor !== verifiedActor ||
-          row.state !== 'pending' ||
-          row.expires_at <= this.now() ||
+          (type === 'Accept' && (row.state !== 'pending' || row.expires_at <= this.now())) ||
           this.blocked(recipient.actor, verifiedActor)
         )
           this.fail(403, 'The original friendship request is no longer pending.');
+        if (type === 'Reject' && ['pending', 'accepted'].includes(row.state))
+          this.revokePair(row.from_actor, row.to_actor);
         this.run(
           'UPDATE friendships SET state=?,updated_at=? WHERE id=?',
           type === 'Accept' ? 'accepted' : 'rejected',
@@ -2030,17 +2112,7 @@ export class Core {
           `grant:${verifiedActor}`,
           this.now(),
         );
-        if (row && !this.audience(postId).length) {
-          this.run("UPDATE publications SET body='',media_ids='[]' WHERE id=?", postId);
-          // Keep only local authors' withdrawal identity, never the revoked conversation.
-          this.run(
-            'DELETE FROM comments WHERE post_id=? AND actor NOT IN (SELECT ? || username FROM users)',
-            postId,
-            `${this.origin}/users/`,
-          );
-          this.run("UPDATE comments SET body='' WHERE post_id=?", postId);
-          this.run('DELETE FROM likes WHERE post_id=?', postId);
-        }
+        this.purgeRemoteWithoutReaders(postId);
       } else if (type === 'Like') {
         this.receiveLike(recipient, verifiedActor, activity, true);
       } else if (type === 'Undo') {

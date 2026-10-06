@@ -76,9 +76,12 @@ textarea {
 input:focus-visible,
 textarea:focus-visible,
 button:focus-visible,
-a:focus-visible {
-  outline: 3px solid #d6a245;
+a:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #182f50;
   outline-offset: 3px;
+  box-shadow: 0 0 0 3px white;
 }
 label {
   display: block;
@@ -168,6 +171,7 @@ main {
   margin: 0.9rem 0;
 }
 .card {
+  overflow-wrap: anywhere;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -198,6 +202,7 @@ main {
   font-size: 0.85rem;
   color: var(--muted);
   margin: 0.4rem 0 0.8rem;
+  overflow-wrap: anywhere;
 }
 .notice-inline {
   background: #edf4fd;
@@ -525,4 +530,22 @@ footer p {
   .narrow {
     padding: 0;
   }
+}
+
+/* Native modal semantics keep the identity decision in the keyboard focus order. */
+dialog#verification {
+  inset: 0;
+  margin: auto;
+  width: min(30rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: auto;
+}
+dialog#verification::backdrop {
+  background: #14243b88;
+}
+dialog#verification .card {
+  margin: 0;
 }

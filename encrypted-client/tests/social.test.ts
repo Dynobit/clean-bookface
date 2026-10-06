@@ -81,3 +81,23 @@ test('reaction schema refuses coerced arrays, objects and numbers', () => {
     assert.throws(() => parseSocial({ ...payload, reaction }), /Unsupported reaction/);
   assert.equal(parseSocial({ ...payload, reaction: null }).kind, 'reaction');
 });
+
+test('tolerant social reads quarantine individual unauthorized, orphaned and conflicting actions', () => {
+  const rejected: SocialEvent[] = [];
+  const good = event('g', { kind: 'comment', text: 'Keep this' });
+  const values = [
+    good,
+    event('x', { kind: 'remove-post' }),
+    event('o', { kind: 'remove-comment', commentId: 'z'.repeat(16) }),
+    event('a', { kind: 'comment', text: 'one' }),
+    event('a', { kind: 'comment', text: 'two' }),
+  ];
+  const state = socialState(post, values, { onInvalid: (e) => rejected.push(e) });
+  assert.deepEqual(
+    state.comments.map((c) => c.text),
+    ['Keep this'],
+  );
+  assert.equal(state.removed, false);
+  assert.equal(rejected.length, 4);
+  assert.throws(() => socialState(post, values), /owner/);
+});

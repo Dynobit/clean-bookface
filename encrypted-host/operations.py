@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Private host operations: HTTPS preparation, invitations and scheduled recovery."""
 import argparse
+import datetime
+import tempfile
 import hashlib
 import json
 import os
@@ -13,7 +15,7 @@ from urllib.parse import urlencode, urlsplit
 import host
 import recovery
 
-CADDY = 'caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b'
+CADDY = 'caddy:2.11.7-alpine@sha256:84058f1a0e5beb97664a9b79dcfd267b594c033d5bb88d8463cdfb59c0779197'
 
 
 def origin(value):
@@ -28,9 +30,14 @@ def origin(value):
 
 
 def atomic(path, value):
-    temporary = path.with_suffix(path.suffix + '.new')
-    host.write(temporary, value)
-    temporary.replace(path)
+    descriptor, temporary = tempfile.mkstemp(prefix=path.name+'.', suffix='.new', dir=path.parent)
+    os.close(descriptor)
+    temporary = pathlib.Path(temporary)
+    try:
+        host.write(temporary, value)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load(runtime):
@@ -162,13 +169,13 @@ def prepare_https(state, client, tunnel_proxy_port=None, cloudflare_visitor_ip=F
                                           'tunnelProxyPort': tunnel_proxy_port, 'cloudflareVisitorIp': cloudflare_visitor_ip})
 
 
-def invitation(state, client=None):
+def invitation(state, client=None, expiry=3600):
     runtime = state['runtime']
     home = json.loads((runtime / 'client-config.json').read_text())['homeserverUrl']
     client = origin(client or json.loads((runtime / 'hosting.json').read_text())['client'])
     if client == home.rstrip('/'):
         raise ValueError('Client and storage host must use separate origins')
-    value = host.invite(state)
+    value = host.invite(state, expiry=expiry)
     value['url'] = client + '/#' + urlencode({'home': home, 'invite': value['token']})
     host.write(runtime / 'invitation.json', value)
     host.write(runtime / 'invitation-link.txt', value['url'] + '\n')
@@ -176,7 +183,7 @@ def invitation(state, client=None):
 
 def storage_args(config):
     result = []
-    allowed = {'repository', 'password_file', 'sftp_host', 'sftp_user', 'sftp_path', 'sftp_port', 'ssh_directory'}
+    allowed = {'repository', 'password_file', 'sftp_host', 'sftp_user', 'sftp_path', 'sftp_port', 'ssh_directory', 'staging_directory', 'maximum_staging_bytes'}
     if set(config) - allowed:
         raise ValueError('Unknown backup configuration field')
     for key, value in config.items():
@@ -188,8 +195,8 @@ def storage_args(config):
 def configure_backup(state, args):
     recovery.validate_storage(args)
     config = {key: str(value.resolve()) if isinstance(value, pathlib.Path) else value
-              for key in ('repository', 'password_file', 'sftp_host', 'sftp_user', 'sftp_path', 'sftp_port', 'ssh_directory')
-              if (value := getattr(args, key)) is not None}
+              for key in ('repository', 'password_file', 'sftp_host', 'sftp_user', 'sftp_path', 'sftp_port', 'ssh_directory', 'staging_directory', 'maximum_staging_bytes')
+              if (value := getattr(args, key, None)) is not None}
     atomic(state['runtime'] / 'backup-config.json', config)
 
 
@@ -199,6 +206,7 @@ def config_digest(config):
 
 def run_backup(state):
     runtime = state['runtime']
+    (runtime / 'scheduled-backup').mkdir(mode=0o700, exist_ok=True)
     config = json.loads((runtime / 'backup-config.json').read_text())
     # Separate scheduler lock; recovery itself retains the service-operation lock.
     with recovery.operation_lock(runtime / 'scheduled-backup'):
@@ -213,21 +221,33 @@ def run_backup(state):
                                 *storage_args(config)], check=True, stdout=output, stderr=subprocess.STDOUT)
             except BaseException:
                 atomic(record_path, {**record, 'status': 'failed', 'durationSeconds': time.time() - start})
+                health(state)
                 raise
         # recovery exits successfully only after full restic data verification and primary resume.
         atomic(record_path, {**record, 'status': 'verified', 'lastSuccess': time.time(),
                              'snapshotStarted': start, 'configSha256': config_digest(config), 'durationSeconds': time.time() - start})
+        health(state)
 
 
 def health(state, maximum_age=90000):
     path = state['runtime'] / 'backup-health.json'
-    record = json.loads(path.read_text()) if path.exists() else {'status': 'never-run'}
+    try:
+        record = json.loads(path.read_text()) if path.exists() else {'status': 'never-run'}
+    except (ValueError, OSError):
+        record = {'status': 'unreadable-health'}
     config_path = state['runtime'] / 'backup-config.json'
-    current_digest = config_digest(json.loads(config_path.read_text())) if config_path.exists() else None
+    try:
+        current_digest = config_digest(json.loads(config_path.read_text())) if config_path.exists() else None
+    except (ValueError, OSError):
+        current_digest = None
     bound = current_digest is not None and record.get('configSha256') == current_digest
     age = time.time() - record['snapshotStarted'] if 'snapshotStarted' in record else None
-    return {**record, 'configurationMatches': bound, 'backupAgeSeconds': None if age is None else round(age),
+    result = {**record, 'configurationMatches': bound, 'backupAgeSeconds': None if age is None else round(age),
             'healthy': bound and record.get('status') == 'verified' and age is not None and 0 <= age <= maximum_age}
+    result['checkedAt'] = time.time()
+    result['attention'] = None if result['healthy'] else ('configuration-mismatch' if not bound else ('stale' if record.get('status') == 'verified' else record.get('status', 'never-run')))
+    atomic(state['runtime'] / 'backup-status.json', result)
+    return result
 
 
 def unit_quote(value):
@@ -244,15 +264,72 @@ def schedule(state):
     command = ' '.join(map(unit_quote, [sys.executable, host.ROOT / 'operations.py', 'backup-run', '--runtime', runtime]))
     host.write(runtime / (name + '.service'), '[Unit]\nDescription=Encrypted home verified backup\nRequires=docker.service\nAfter=docker.service network-online.target\n[Service]\nType=oneshot\nUMask=0077\nExecStart=' + command + '\nTimeoutStartSec=infinity\n')
     host.write(runtime / (name + '.timer'), '[Unit]\nDescription=Daily encrypted home backup\n[Timer]\nOnCalendar=*-*-* 03:00:00\nRandomizedDelaySec=15m\nPersistent=true\n[Install]\nWantedBy=timers.target\n')
+    health_name = state['project'] + '-backup-health'
+    check = ' '.join(map(unit_quote, [sys.executable, host.ROOT / 'operations.py', 'backup-health', '--runtime', runtime]))
+    host.write(runtime / (health_name + '.service'), '[Unit]\nDescription=Encrypted home local backup health\n[Service]\nType=oneshot\nUMask=0077\nExecStart=' + check + '\n')
+    host.write(runtime / (health_name + '.timer'), '[Unit]\nDescription=Check encrypted home backup age\n[Timer]\nOnBootSec=5m\nOnUnitActiveSec=15m\n[Install]\nWantedBy=timers.target\n')
     return name
+
+
+def retention(state, keep_daily=30, apply=False):
+    if not 7 <= keep_daily <= 3650:
+        raise ValueError('Retention requires 7–3650 daily snapshots')
+    runtime = state['runtime']
+    (runtime/'scheduled-backup').mkdir(mode=0o700, exist_ok=True)
+    with recovery.operation_lock(runtime/'scheduled-backup'), recovery.operation_lock(runtime):
+        if not health(state)['healthy']:
+            raise RuntimeError('Retention requires a recent verified backup of this exact configuration')
+        config = json.loads((runtime/'backup-config.json').read_text())
+        storage_args(config)
+        args = argparse.Namespace(**{key: config.get(key) for key in ['repository','password_file','sftp_host','sftp_user','sftp_path','ssh_directory']}, sftp_port=config.get('sftp_port',22))
+        for key in ['repository','password_file','ssh_directory']:
+            if getattr(args,key): setattr(args,key,pathlib.Path(getattr(args,key)))
+        recovery.validate_storage(args)
+        with tempfile.TemporaryDirectory(prefix='retention-', dir=runtime) as tmp:
+            def restic(*command):
+                return subprocess.run(recovery.restic_command(args,pathlib.Path(tmp),*command),check=True,capture_output=True,text=True).stdout
+            tag = 'cbf-project-' + state['project']
+            snapshots = json.loads(restic('snapshots','--json','--tag',tag))
+            if not snapshots:
+                raise RuntimeError('No project-bound snapshots; create a new backup before retention')
+            newest = max(snapshots,key=lambda item:item['time'])
+            age = time.time()-datetime.datetime.fromisoformat(newest['time'].replace('Z','+00:00')).timestamp()
+            if not 0 <= age <= 90000:
+                raise RuntimeError('Repository has no recent project-bound snapshot')
+            plan = json.loads(restic('forget','--json','--dry-run','--tag',tag,'--group-by','tags','--keep-daily',str(keep_daily),'--keep-last','2','--keep-within','7d'))
+            remove = sorted(item['id'] for group in plan for item in (group.get('remove') or []))
+            known = {item['id'] for item in snapshots}
+            if any(not re.fullmatch(r'[a-f0-9]{64}', item) for item in remove) or newest['id'] in remove or not set(remove) <= known:
+                raise RuntimeError('Retention plan escapes this project or removes its newest snapshot')
+            proposal = {'configuration':config_digest(config),'keepDaily':keep_daily,'remove':remove,'snapshots':sorted(known)}
+            path = runtime/'retention-preview.json'
+            if not apply:
+                atomic(path, proposal)
+                return {'dryRun':True,'snapshotsToRemove':len(remove),'preview':str(path)}
+            if not path.exists() or json.loads(path.read_text()) != proposal:
+                raise RuntimeError('Run dry-run inspection again; retention plan or configuration changed')
+            restic('check','--read-data')
+            if config_digest(json.loads((runtime/'backup-config.json').read_text())) != proposal['configuration'] or not health(state)['healthy']:
+                raise RuntimeError('Backup configuration/health changed during retention verification')
+            if remove:
+                restic('forget',*remove)
+                restic('prune')
+            atomic(runtime/'retention-result.json', {**proposal,'completedAt':time.time()})
+            path.unlink()
+            return {'dryRun':False,'snapshotsRemoved':len(remove)}
 
 
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['prepare-https', 'validate-https', 'invite', 'backup-configure', 'backup-run', 'backup-health', 'schedule'])
+    parser.add_argument('action', choices=['prepare-https', 'validate-https', 'invite', 'backup-configure', 'backup-run', 'backup-health', 'backup-retention', 'schedule'])
     parser.add_argument('--runtime', required=True, type=pathlib.Path)
     parser.add_argument('--client-url')
+    parser.add_argument('--expiry-hours', type=int, default=1)
+    parser.add_argument('--staging-directory', type=pathlib.Path)
+    parser.add_argument('--maximum-staging-bytes', type=int, default=100 * 1024**3)
+    parser.add_argument('--keep-daily', type=int, default=30)
+    parser.add_argument('--apply-retention', action='store_true')
     parser.add_argument('--tunnel-proxy-port', type=int, help='Explicit TLS-terminating tunnel mode: restricted HTTP origin published only on this loopback port')
     parser.add_argument('--cloudflare-visitor-ip', action='store_true', help='Trust valid CF-Connecting-IP only from loopback cloudflared; Linux host networking')
     parser.add_argument('--repository', type=pathlib.Path)
@@ -270,8 +347,8 @@ def main():
     elif args.action == 'validate-https':
         host.compose(state, 'run', '--rm', '--no-deps', 'https', 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
     elif args.action == 'invite':
-        invitation(state, args.client_url)
-        print('Private invitation saved in runtime/invitation-link.txt (one use, one hour).')
+        invitation(state, args.client_url, args.expiry_hours * 3600)
+        print('Private invitation saved in runtime/invitation-link.txt (one use; selected expiry).')
     elif args.action == 'backup-configure':
         if not args.password_file or bool(args.repository) == bool(args.sftp_host):
             parser.error('Provide --password-file and exactly one of --repository or --sftp-host')
@@ -285,6 +362,8 @@ def main():
         result = health(state, args.maximum_age)
         print(json.dumps(result, indent=2))
         return 0 if result['healthy'] else 1
+    elif args.action == 'backup-retention':
+        print(json.dumps(retention(state, args.keep_daily, args.apply_retention), indent=2))
     elif args.action == 'schedule':
         print('Prepared systemd service and timer: ' + schedule(state))
     return 0

@@ -1,4 +1,5 @@
 import { forgetDeviceCrypto } from './local-cleanup';
+import sdkPackage from 'matrix-js-sdk/package.json' with { type: 'json' };
 import {
   createClient,
   ClientEvent,
@@ -25,6 +26,7 @@ import {
   OlmMachine,
   UserId,
   DeviceId,
+  RoomMessageRequest,
   initAsync,
 } from '@matrix-org/matrix-sdk-crypto-wasm';
 import type {
@@ -35,11 +37,33 @@ import type {
 import type { IMegolmSessionData } from 'matrix-js-sdk/lib/@types/crypto';
 import type { UIAuthCallback } from 'matrix-js-sdk/lib/interactive-auth';
 
+export class SessionInUseError extends Error {
+  readonly code = 'SESSION_IN_USE';
+  constructor() {
+    super('This device is already open in another tab.');
+  }
+}
 export interface Session {
   baseUrl: string;
   userId: string;
   deviceId: string;
   accessToken: string;
+}
+export function verificationTerminalStorageKey(
+  session: Pick<Session, 'baseUrl' | 'userId' | 'deviceId'>,
+): string {
+  return (
+    'clean-bookface.verification-terminal.v1:' +
+    [session.baseUrl, session.userId, session.deviceId].map(encodeURIComponent).join(':')
+  );
+}
+export function recoveryProgressStorageKey(
+  session: Pick<Session, 'baseUrl' | 'userId' | 'deviceId'>,
+): string {
+  return (
+    'clean-bookface.restore-pending.v1:' +
+    [session.baseUrl, session.userId, session.deviceId].map(encodeURIComponent).join(':')
+  );
 }
 export interface VerificationView {
   id: string;
@@ -97,9 +121,16 @@ export function freshInitialSyncFetch(
     }
     if (!filter || typeof filter !== 'object' || Array.isArray(filter))
       throw new Error('Initial encrypted sync requires a valid inline filter.');
+    const room = (filter as { room?: unknown }).room;
+    if (room !== undefined && (!room || typeof room !== 'object' || Array.isArray(room)))
+      throw new Error('Initial encrypted sync requires a valid room filter.');
     url.searchParams.set(
       'filter',
-      JSON.stringify({ ...filter, 'org.cleanbookface.sync_instance': crypto.randomUUID() }),
+      JSON.stringify({
+        ...filter,
+        room: { ...(room as Record<string, unknown> | undefined), include_leave: true },
+        'org.cleanbookface.sync_instance': crypto.randomUUID(),
+      }),
     );
     return fetcher(input instanceof Request ? new Request(url, input) : url, init);
   };
@@ -186,6 +217,7 @@ export function validateOrigin(input: string): string {
 }
 export class Identity {
   public onVerification?: (view: VerificationView) => void;
+  public onVerificationRejected?: (message: string) => void;
   private keys = new Map<string, Uint8Array<ArrayBuffer>>();
   private unlock?: () => void;
   private preparedRecovery: GeneratedSecretStorageKey | null = null;
@@ -196,6 +228,160 @@ export class Identity {
   }
   private watched = new WeakSet<VerificationRequest>();
   private verifiers = new WeakSet<Verifier>();
+  private terminalVerifications = new Set<string>();
+  private restorePendingMemory = false;
+  static forgetRecoveryProgress(session: Pick<Session, 'baseUrl' | 'userId' | 'deviceId'>): void {
+    localStorage.removeItem(recoveryProgressStorageKey(session));
+  }
+  private restorePending(): boolean {
+    if (typeof localStorage === 'undefined') return this.restorePendingMemory;
+    const value = localStorage.getItem(recoveryProgressStorageKey(this.session));
+    if (value !== null && value !== 'pending')
+      throw new Error('Saved recovery progress could not be read.');
+    return value === 'pending';
+  }
+  private setRestorePending(pending: boolean): void {
+    if (typeof localStorage !== 'undefined') {
+      const key = recoveryProgressStorageKey(this.session);
+      if (pending) localStorage.setItem(key, 'pending');
+      else localStorage.removeItem(key);
+    }
+    this.restorePendingMemory = pending;
+  }
+
+  private verificationOrderingInstalled = false;
+  private verificationMacs = new Map<
+    string,
+    {
+      promise: Promise<void>;
+      resolve(): void;
+      reject(reason: unknown): void;
+      state: 'pending' | 'sent' | 'failed';
+    }
+  >();
+  private verificationMac(roomId: string, id: string) {
+    const key = JSON.stringify([roomId, id]);
+    let gate = this.verificationMacs.get(key);
+    if (!gate) {
+      if (this.verificationMacs.size >= 512) {
+        const completed = [...this.verificationMacs].find(([, value]) => value.state !== 'pending');
+        if (!completed) throw new Error('Too many unfinished identity checks.');
+        this.verificationMacs.delete(completed[0]);
+      }
+      let resolve!: () => void, reject!: (reason: unknown) => void;
+      const promise = new Promise<void>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      void promise.catch(() => {});
+      gate = { promise, resolve, reject, state: 'pending' };
+      this.verificationMacs.set(key, gate);
+    }
+    return gate;
+  }
+  /** SDK43 can concurrently dispatch Done while its MAC is retrying a 429.
+   * Rust then terminalizes the peer request before accepting that MAC. Keep
+   * the exact room/request's Done behind successful MAC transport completion.
+   * This gate never changes a verification result or computes trust itself. */
+  private installVerificationOrdering(): void {
+    if (this.verificationOrderingInstalled) return;
+    const backend = this.crypto as unknown as {
+      outgoingRequestProcessor: {
+        makeOutgoingRequest(request: unknown, ...args: unknown[]): Promise<void>;
+      };
+    };
+    const processor = backend.outgoingRequestProcessor;
+    if (sdkPackage.version !== '43.0.0' || typeof processor?.makeOutgoingRequest !== 'function')
+      throw new Error('Identity checks require reviewed Matrix SDK 43.0.0.');
+    const original = processor.makeOutgoingRequest.bind(processor);
+    processor.makeOutgoingRequest = async (request, ...args) => {
+      if (
+        !(request instanceof RoomMessageRequest) ||
+        !['m.key.verification.mac', 'm.key.verification.done'].includes(request.event_type)
+      )
+        return original(request, ...args);
+      const relation = JSON.parse(request.body)['m.relates_to'];
+      if (
+        relation?.rel_type !== 'm.reference' ||
+        typeof relation.event_id !== 'string' ||
+        !relation.event_id
+      )
+        throw new Error('Invalid identity-check relation.');
+      const key = JSON.stringify([request.room_id, relation.event_id]);
+      if (request.event_type === 'm.key.verification.done') {
+        const gate = this.verificationMacs.get(key);
+        if (!gate) throw new Error('This identity check has not been confirmed here.');
+        await gate.promise;
+        return original(request, ...args);
+      }
+      const gate = this.verificationMac(request.room_id, relation.event_id);
+      try {
+        await original(request, ...args);
+        gate.state = 'sent';
+        gate.resolve();
+      } catch (error) {
+        gate.state = 'failed';
+        gate.reject(error);
+        throw error;
+      }
+    };
+    this.verificationOrderingInstalled = true;
+  }
+  private beginVerificationConfirmation(
+    request: Pick<VerificationRequest, 'roomId' | 'transactionId'>,
+  ): void {
+    if (request.roomId && request.transactionId)
+      this.verificationMac(request.roomId, request.transactionId);
+  }
+  private cancelVerificationOrdering(
+    request: Pick<VerificationRequest, 'roomId' | 'transactionId'>,
+  ): void {
+    const gate = this.verificationMacs.get(JSON.stringify([request.roomId, request.transactionId]));
+    if (gate?.state === 'pending') {
+      gate.state = 'failed';
+      gate.reject(new Error('Identity check cancelled.'));
+    }
+  }
+
+  static forgetVerificationHistory(
+    session: Pick<Session, 'baseUrl' | 'userId' | 'deviceId'>,
+  ): void {
+    localStorage.removeItem(verificationTerminalStorageKey(session));
+  }
+  private terminalVerification(peer: string, id: string, remember = false): boolean {
+    const key = verificationTerminalStorageKey(this.session);
+    const entry = JSON.stringify([peer, id]);
+    if (!peer || !id || entry.length > 4096) throw new Error('Invalid identity-check identifier.');
+    // Exact local terminal decisions only: host timestamps and existing peer
+    // trust cannot authorize or suppress a new identity comparison.
+    if (typeof localStorage !== 'undefined') {
+      const stored: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+      if (
+        !Array.isArray(stored) ||
+        stored.length > 512 ||
+        stored.some((value) => {
+          if (typeof value !== 'string' || value.length > 4096) return true;
+          const pair: unknown = JSON.parse(value);
+          return (
+            !Array.isArray(pair) ||
+            pair.length !== 2 ||
+            pair.some((part) => typeof part !== 'string' || !part) ||
+            JSON.stringify(pair) !== value
+          );
+        })
+      )
+        throw new Error('Saved identity-check state is unreadable.');
+      for (const value of stored) this.terminalVerifications.add(value);
+    }
+    if (remember) {
+      const entries = [...this.terminalVerifications].filter((value) => value !== entry);
+      entries.push(entry);
+      const retained = entries.slice(-512);
+      if (typeof localStorage !== 'undefined') localStorage.setItem(key, JSON.stringify(retained));
+      this.terminalVerifications = new Set(retained);
+    }
+    return this.terminalVerifications.has(entry);
+  }
   private constructor(
     public readonly session: Session,
     public readonly client: MatrixClient,
@@ -250,9 +436,27 @@ export class Identity {
     }
     throw new Error('Registration did not complete.');
   }
+  static sessionIsInvalid(error: unknown): error is MatrixError {
+    return (
+      error instanceof MatrixError &&
+      error.httpStatus === 401 &&
+      error.data.errcode === 'M_UNKNOWN_TOKEN'
+    );
+  }
+  static async logoutSession(session: Session): Promise<void> {
+    const client = createArchiveClient({ ...session, baseUrl: validateOrigin(session.baseUrl) });
+    try {
+      await client.logout(true);
+    } catch (error) {
+      if (!Identity.sessionIsInvalid(error)) throw error;
+    } finally {
+      client.stopClient();
+    }
+  }
   static async open(
     session: Session,
     onVerification?: (view: VerificationView) => void,
+    onVerificationRejected?: (message: string) => void,
   ): Promise<Identity> {
     if (!navigator.locks)
       throw new Error('This browser cannot protect the encryption database from concurrent tabs.');
@@ -277,12 +481,13 @@ export class Identity {
     });
     instance = new Identity(session, client);
     instance.onVerification = onVerification;
+    instance.onVerificationRejected = onVerificationRejected;
     const name = `clean-bookface:${session.baseUrl}:${session.userId}:${session.deviceId}`;
     await new Promise<void>((resolve, reject) => {
       void navigator.locks
         .request(name, { ifAvailable: true }, async (lock) => {
           if (!lock) {
-            reject(new Error('This device is already open in another tab.'));
+            reject(new SessionInUseError());
             return;
           }
           await new Promise<void>((release) => {
@@ -294,6 +499,7 @@ export class Identity {
     });
     try {
       await client.initRustCrypto({ useIndexedDB: true, cryptoDatabasePrefix: name });
+      instance.installVerificationOrdering();
       instance.crypto.globalBlacklistUnverifiedDevices = true;
       instance.crypto.setDeviceIsolationMode(new AllDevicesIsolationMode(true));
       client.on(CryptoEvent.VerificationRequestReceived, (request) => instance.watch(request));
@@ -353,8 +559,19 @@ export class Identity {
       this.session.deviceId,
     );
     const recoveryStatus = await this.crypto.getSecretStorageStatus();
+    const signing = await this.crypto.getCrossSigningStatus();
+    const recoverySetupResumable = Object.values(signing.privateKeysCachedLocally).every(Boolean);
+    const backupKey = await this.crypto.getSessionBackupPrivateKey();
+    const backupKeyCached = !!backupKey;
+    const recoveryRestorePending = this.restorePending();
+    backupKey?.fill(0);
     return {
       hasIdentity,
+      recoverySetupResumable,
+      backupKeyCached,
+      recoveryRestorePending,
+      historyRecoveryNeeded:
+        hasIdentity && (recoveryRestorePending || (recoveryStatus.ready && !backupKeyCached)),
       recoveryConfigured: await this.client.secretStorage.hasKey(),
       recoveryMissingSecrets: Object.entries(recoveryStatus.secretStorageKeyValidityMap)
         .filter(([, valid]) => !valid)
@@ -366,7 +583,14 @@ export class Identity {
   }
   async needsRecovery(): Promise<boolean> {
     const s = await this.status();
-    return s.hasIdentity && (!s.ownDeviceTrusted || !s.crossSigningReady);
+    return (
+      s.hasIdentity &&
+      (!s.ownDeviceTrusted ||
+        !s.crossSigningReady ||
+        !s.recoveryReady ||
+        !s.backupKeyCached ||
+        s.recoveryRestorePending)
+    );
   }
   /** Generate locally. The caller saves and confirms this kit before setupRecovery. */
   async prepareRecovery(): Promise<string> {
@@ -376,7 +600,7 @@ export class Identity {
       const s = await this.status();
       if (await this.client.secretStorage.hasKey())
         throw new Error('Recovery already exists. Use the existing recovery kit.');
-      if (s.hasIdentity && !s.crossSigningReady)
+      if (s.hasIdentity && !s.recoverySetupResumable)
         throw new Error('An identity already exists. Recover it instead of replacing it.');
       const key = await this.crypto.createRecoveryKeyFromPassphrase();
       if (!key.encodedPrivateKey) throw new Error('Recovery key generation failed.');
@@ -417,7 +641,8 @@ export class Identity {
       this.keys.set(existing[0], key.privateKey);
     }
     const s = await this.status();
-    if (s.hasIdentity && !s.crossSigningReady) {
+    if ((s.hasIdentity || existing) && !s.recoverySetupResumable) {
+      if (!s.hasIdentity) throw new Error('Published recovery identity is unavailable.');
       // Only an intact copy of the existing identity can authorize this import.
       for (const name of [
         'm.cross_signing.master',
@@ -428,51 +653,204 @@ export class Identity {
           throw new Error('The existing identity is unavailable; refusing to replace it.');
       }
     }
+    // Validate cached keys against the server before SDK exports them to storage.
+    if (s.recoverySetupResumable) await this.publishCachedIdentity(password);
     await this.crypto.bootstrapCrossSigning({
       authUploadDeviceSigningKeys: this.passwordAuth(password),
     });
-    // An interrupted run may already have created a backup. Never rotate that backup on retry.
-    const backup = await this.crypto.getKeyBackupInfo();
+    // SDK43 leaves cached keys after an interrupted public-key upload and its
+    // bootstrap retry does not upload them (CrossSigningIdentity's TODO).
+    if (!s.recoverySetupResumable) await this.publishCachedIdentity(password);
     await this.crypto.bootstrapSecretStorage({
       createSecretStorageKey: async () => key,
-      setupNewKeyBackup: !backup,
+      setupNewKeyBackup: false,
     });
+    await this.ensureRecoveryBackup();
     await this.crypto.crossSignDevice(this.session.deviceId);
     if (!(await this.crypto.isSecretStorageReady()))
       throw new Error('Recovery setup is incomplete. Keep the saved kit and retry on this device.');
     return key.encodedPrivateKey!;
   }
-  async restoreRecovery(encoded: string, password: string): Promise<void> {
-    const tuple = await this.client.secretStorage.getKey();
-    if (!tuple) throw new Error('This account has no recovery kit.');
-    const [id, info] = tuple;
-    const key = decodeRecoveryKey(encoded);
-    if (!(await this.client.secretStorage.checkKey(key, info))) {
+  /** Resume the saved kit on this device; no existing signing or backup key is rotated. */
+  async resumeRecoverySetup(encoded: string, password: string): Promise<string> {
+    if (this.recoverySetup) return this.recoverySetup;
+    const key = await this.validateRecoveryKit(encoded);
+    return this.resumeWithValidatedKey(encoded, password, key);
+  }
+  private async resumeWithValidatedKey(
+    encoded: string,
+    password: string,
+    key: Uint8Array<ArrayBuffer>,
+  ): Promise<string> {
+    if (this.recoverySetup) {
       key.fill(0);
-      throw new Error('Recovery key does not match this account.');
+      return this.recoverySetup;
     }
-    this.keys.set(id, key);
     try {
-      // Never let bootstrap fall through to creating replacement keys.
-      for (const name of [
-        'm.cross_signing.master',
-        'm.cross_signing.self_signing',
-        'm.cross_signing.user_signing',
+      this.preparedRecovery?.privateKey.fill(0);
+      this.preparedRecovery = { privateKey: key, encodedPrivateKey: encoded, keyInfo: {} };
+      return await this.setupRecovery(password);
+    } catch (error) {
+      if (this.preparedRecovery?.privateKey !== key) key.fill(0);
+      throw error;
+    }
+  }
+  /** Read-only validation: a mistyped kit must not change recovery routing. */
+  private async validateRecoveryKit(encoded: string) {
+    const key = decodeRecoveryKey(encoded);
+    try {
+      const existing = await this.client.secretStorage.getKey();
+      if (existing && !(await this.client.secretStorage.checkKey(key, existing[1])))
+        throw new Error('Recovery key does not match this account.');
+      if (!existing && !(await this.status()).recoverySetupResumable)
+        throw new Error('Setup can only resume on the original browser with its signing keys.');
+      return key;
+    } catch (error) {
+      key.fill(0);
+      throw error;
+    }
+  }
+  /** Pinned SDK43 adapter: retry publication of the SAME Rust signing identity. */
+  private async publishCachedIdentity(password: string): Promise<void> {
+    const backend = this.crypto as unknown as {
+      getOlmMachineOrThrow(): OlmMachine;
+      outgoingRequestProcessor: {
+        makeOutgoingRequest(request: unknown, auth: UIAuthCallback<void>): Promise<void>;
+      };
+    };
+    if (
+      sdkPackage.version !== '43.0.0' ||
+      typeof backend.getOlmMachineOrThrow !== 'function' ||
+      typeof backend.outgoingRequestProcessor?.makeOutgoingRequest !== 'function'
+    )
+      throw new Error('Recovery resumption requires reviewed Matrix SDK 43.0.0.');
+    const state = await this.crypto.getCrossSigningStatus();
+    if (!Object.values(state.privateKeysCachedLocally).every(Boolean))
+      throw new Error('The existing signing identity is unavailable; refusing to replace it.');
+    const requests = await backend.getOlmMachineOrThrow().bootstrapCrossSigning(false);
+    try {
+      const candidate = JSON.parse(requests.uploadSigningKeysRequest.body);
+      const published = await this.client.http.authedRequest<
+        Record<string, Record<string, { keys: Record<string, string> }>>
+      >(Method.Post, '/keys/query', undefined, { device_keys: { [this.session.userId]: [] } });
+      let complete = true;
+      for (const [collection, field] of [
+        ['master_keys', 'master_key'],
+        ['self_signing_keys', 'self_signing_key'],
+        ['user_signing_keys', 'user_signing_key'],
       ]) {
-        if (!(await this.client.secretStorage.get(name)))
-          throw new Error('Recovery identity is incomplete; refusing to replace it.');
+        const current = published[collection]?.[this.session.userId];
+        if (!current) complete = false;
+        if (current && JSON.stringify(current.keys) !== JSON.stringify(candidate[field]?.keys))
+          throw new Error('The published identity changed; refusing to replace it.');
       }
-      if (!(await this.crypto.userHasCrossSigningKeys(this.session.userId, true)))
-        throw new Error('Published recovery identity is unavailable.');
-      await this.crypto.bootstrapCrossSigning({
-        authUploadDeviceSigningKeys: this.passwordAuth(password),
-      });
-      await this.crypto.crossSignDevice(this.session.deviceId);
+      // A recovered Rust identity may not retain upload signatures on its
+      // public subkeys. Do not re-upload an already complete matching identity.
+      if (complete) return;
+      for (const request of [
+        requests.uploadKeysRequest,
+        requests.uploadSigningKeysRequest,
+        requests.uploadSignaturesRequest,
+      ])
+        if (request)
+          await backend.outgoingRequestProcessor.makeOutgoingRequest(
+            request,
+            this.passwordAuth(password),
+          );
+    } finally {
+      requests.free();
+    }
+  }
+  /** Persist the encrypted backup secret BEFORE creating its server version. */
+  private async ensureRecoveryBackup(): Promise<void> {
+    // Refresh the SDK cache: a previous POST may have succeeded before its reply
+    // was lost. Never use a cached absence to create or delete another version.
+    await this.crypto.checkKeyBackupAndEnable();
+    let backup: KeyBackupInfo | null;
+    try {
+      backup = await this.client.http.authedRequest<KeyBackupInfo>(
+        Method.Get,
+        '/room_keys/version',
+        undefined,
+        undefined,
+        { prefix: ClientPrefix.V3 },
+      );
+    } catch (error) {
+      if (
+        !(error instanceof MatrixError) ||
+        error.httpStatus !== 404 ||
+        error.data.errcode !== 'M_NOT_FOUND'
+      )
+        throw error;
+      backup = null;
+    }
+    let secret = await this.client.secretStorage.get('m.megolm_backup.v1');
+    if (!secret && backup) {
+      // bootstrapSecretStorage already tried to save a matching local key.
+      throw new Error(
+        'The existing backup key is unavailable. Keep this browser and use its recovery kit.',
+      );
+    }
+    const key = secret
+      ? BackupDecryptionKey.fromBase64(secret)
+      : BackupDecryptionKey.createRandomKey();
+    const publicKey = key.megolmV1PublicKey;
+    try {
+      if (!secret) {
+        secret = key.toBase64();
+        await this.client.secretStorage.store('m.megolm_backup.v1', secret);
+      }
+      if (!backup) {
+        const authData = { public_key: publicKey.publicKeyBase64 };
+        const backend = this.crypto as unknown as { signObject(value: object): Promise<void> };
+        if (sdkPackage.version !== '43.0.0' || typeof backend.signObject !== 'function')
+          throw new Error('Recovery requires reviewed Matrix SDK 43.0.0.');
+        await backend.signObject(authData);
+        await this.client.http.authedRequest(
+          Method.Post,
+          '/room_keys/version',
+          undefined,
+          {
+            algorithm: publicKey.algorithm,
+            auth_data: authData,
+          },
+          { prefix: ClientPrefix.V3 },
+        );
+        await this.crypto.checkKeyBackupAndEnable();
+        backup = await this.crypto.getKeyBackupInfo();
+      }
+      if (
+        !backup ||
+        backup.algorithm !== publicKey.algorithm ||
+        !('public_key' in backup.auth_data) ||
+        backup.auth_data.public_key !== publicKey.publicKeyBase64
+      )
+        throw new Error('Recovery key does not match the existing backup; refusing to replace it.');
+      await this.crypto.loadSessionBackupPrivateKeyFromSecretStorage();
+    } finally {
+      publicKey.free();
+      key.free();
+    }
+  }
+  async restoreRecovery(encoded: string, password: string): Promise<void> {
+    // Read-only checks precede the journal: a wrong kit cannot strand a healthy
+    // browser. Persist intent before any step caches keys or changes trust.
+    const checkedKey = await this.validateRecoveryKit(encoded);
+    try {
+      this.setRestorePending(true);
+    } catch (error) {
+      checkedKey.fill(0);
+      throw error;
+    }
+    try {
+      await this.resumeWithValidatedKey(encoded, password, checkedKey);
       await this.crypto.loadSessionBackupPrivateKeyFromSecretStorage();
       await this.crypto.restoreKeyBackup();
+      await this.waitForKeyBackup();
+      this.setRestorePending(false);
     } finally {
-      this.keys.delete(id);
-      key.fill(0);
+      checkedKey.fill(0);
+      this.acknowledgeRecoveryKey();
     }
   }
   /**
@@ -546,6 +924,21 @@ export class Identity {
     let decryptor: BackupDecryptionKey | undefined;
     try {
       const check = await bounded(this.crypto.checkKeyBackupAndEnable());
+      if (!check) {
+        // SDK43 swallows discovery errors, including M_UNKNOWN_TOKEN. Confirm
+        // this exact session independently; only a real typed 401 may reach the
+        // caller's ended-session warning. A missing backup or network error
+        // never authorizes cleanup.
+        await bounded(
+          this.client.http.authedRequest(
+            Method.Get,
+            '/account/whoami',
+            undefined,
+            undefined,
+            requestOptions,
+          ),
+        );
+      }
       if (
         !check?.trustInfo.trusted ||
         !check.trustInfo.matchesDecryptionKey ||
@@ -678,18 +1071,93 @@ export class Identity {
       this.session.deviceId,
     );
     const peer = await this.crypto.getUserVerificationStatus(userId);
-    if (!own?.crossSigningVerified || !peer.isCrossSigningVerified() || peer.needsUserApproval)
-      throw new Error('Verify this identity and your own device before sharing.');
+    if (!own?.crossSigningVerified) throw new Error('Your own browser is not verified.');
+    if (!peer.isCrossSigningVerified()) throw new Error('This friend’s identity is not verified.');
+    if (peer.needsUserApproval)
+      throw new Error('This friend’s changed identity still needs approval.');
+  }
+  private async waitForVerifiedUser(userId: string, timeoutMs = 15_000): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      let checking = false,
+        changed = false,
+        finished = false;
+      let lastError: unknown = new Error('Identity trust did not become ready.');
+      const cleanup = () => {
+        finished = true;
+        clearTimeout(timer);
+        this.client.removeListener(CryptoEvent.UserTrustStatusChanged, progress);
+        this.client.removeListener(CryptoEvent.KeysChanged, check);
+        this.client.removeListener(ClientEvent.Sync, check);
+      };
+      const check = async () => {
+        if (finished) return;
+        if (checking) {
+          changed = true;
+          return;
+        }
+        checking = true;
+        try {
+          await this.requireVerifiedUser(userId);
+          cleanup();
+          resolve();
+        } catch (error) {
+          lastError = error;
+        } finally {
+          checking = false;
+          if (changed && !finished) {
+            changed = false;
+            void check();
+          }
+        }
+      };
+      const progress = (changedUserId: string) => {
+        if (changedUserId === userId || changedUserId === this.session.userId) void check();
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(lastError);
+      }, timeoutMs);
+      this.client.on(CryptoEvent.UserTrustStatusChanged, progress);
+      this.client.on(CryptoEvent.KeysChanged, check);
+      this.client.on(ClientEvent.Sync, check);
+      void check();
+    });
   }
   async requestVerification(userId: string, roomId: string): Promise<void> {
+    if (userId === this.session.userId) throw new Error('Use your recovery kit to add a browser.');
     this.watch(await this.crypto.requestVerificationDM(userId, roomId));
   }
   private watch(request: VerificationRequest): void {
     if (this.watched.has(request)) return;
     this.watched.add(request);
+    // No add-browser flow: reject before attaching verifier or accept callbacks.
+    if (request.otherUserId === this.session.userId) {
+      void request.cancel().catch(() => {
+        /* Still rejected locally if delivery fails. */
+      });
+      this.onVerificationRejected?.(
+        'Another browser requested access to your account. The request was rejected. Use your saved recovery kit to add a browser.',
+      );
+      return;
+    }
     const id = request.transactionId ?? crypto.randomUUID();
+    try {
+      if (this.terminalVerification(request.otherUserId, id)) {
+        void request.cancel().catch(() => {});
+        return;
+      }
+    } catch {
+      this.onVerificationRejected?.(
+        'Saved identity-check state could not be read. Reload before starting another check.',
+      );
+      return;
+    }
     let sas: ShowSasCallbacks | null = null;
     let failure: string | undefined;
+    let authenticated = false;
+    let cancelledLocally = false;
+    let confirmation: Promise<void> | undefined;
+    const remember = () => this.terminalVerification(request.otherUserId, id, true);
     const emit = () => {
       const verifier = request.verifier;
       if (verifier && !this.verifiers.has(verifier)) {
@@ -700,16 +1168,50 @@ export class Identity {
         });
         verifier.on(VerifierEvent.Cancel, () => emit());
         sas = verifier.getShowSasCallbacks();
-        void verifier.verify().then(emit, () => {
-          failure = 'The identity comparison did not finish. Start a new check with your friend.';
-          emit();
-        });
+        void verifier
+          .verify()
+          .then(async () => {
+            // The request phase can reach Done before asynchronous local trust
+            // and signature processing finish. It alone is not sharing readiness.
+            await confirmation;
+            await this.waitForVerifiedUser(request.otherUserId);
+            remember();
+            authenticated = true;
+            emit();
+          })
+          .catch((error: unknown) => {
+            failure =
+              'The identity comparison could not be authenticated. Cancel and start a new check with your friend.';
+            if (
+              error instanceof Error &&
+              [
+                'Your own browser is not verified.',
+                'This friend’s identity is not verified.',
+                'This friend’s changed identity still needs approval.',
+              ].includes(error.message)
+            )
+              failure += ' ' + error.message;
+            emit();
+          });
       }
-      const active = request.phase === VerificationPhase.Started;
+      if (request.phase === VerificationPhase.Cancelled) {
+        this.cancelVerificationOrdering(request);
+        try {
+          remember();
+        } catch {
+          failure = 'The cancelled check could not be saved. Reload before starting another check.';
+        }
+      }
+      const active = request.phase === VerificationPhase.Started && !failure;
       this.onVerification?.({
         id,
         peer: request.otherUserId,
-        phase: VerificationPhase[request.phase].toLowerCase(),
+        phase: cancelledLocally
+          ? 'cancelled'
+          : (request.phase === VerificationPhase.Done && !authenticated) ||
+              (request.phase === VerificationPhase.Cancelled && failure)
+            ? 'confirming'
+            : VerificationPhase[request.phase].toLowerCase(),
         ...(request.cancellationCode ? { cancellationCode: request.cancellationCode } : {}),
         ...(request.cancellingUserId ? { cancelledBy: request.cancellingUserId } : {}),
         ...(failure ? { failure } : {}),
@@ -728,11 +1230,47 @@ export class Identity {
           ? {
               emoji: sas.sas.emoji,
               decimal: sas.sas.decimal,
-              confirm: () => sas!.confirm(),
+              confirm: () => {
+                this.beginVerificationConfirmation(request);
+                return (confirmation ??= sas!.confirm());
+              },
               mismatch: () => sas!.mismatch(),
             }
           : {}),
-        cancel: () => request.cancel(),
+        cancel: async () => {
+          const errors: unknown[] = [];
+          try {
+            remember();
+          } catch (error) {
+            errors.push(error);
+            failure =
+              'The cancelled check could not be saved. Reload before starting another check.';
+          }
+          // Close locally and block queued Done before cancel() can emit a
+          // synchronous SDK change. A failed journal must not prevent delivery
+          // or recursively trigger cancellation while recovery is open.
+          cancelledLocally = true;
+          this.cancelVerificationOrdering(request);
+          try {
+            await request.cancel();
+          } catch (error) {
+            errors.push(error);
+            failure =
+              errors.length > 1
+                ? 'The check was closed here, but cancellation could not be sent or saved. Reload before starting another check.'
+                : 'The check was closed here, but cancellation could not be sent. Start a new check with your friend.';
+          } finally {
+            emit();
+          }
+          if (errors.length) {
+            const message =
+              errors.length > 1
+                ? 'The check was closed here, but cancellation could not be sent or saved. Reload before starting another check.'
+                : failure!;
+            this.onVerificationRejected?.(message);
+            throw new AggregateError(errors, message);
+          }
+        },
       });
     };
     request.on(VerificationRequestEvent.Change, emit);
@@ -744,6 +1282,9 @@ export class Identity {
     await forgetDeviceCrypto(this.session);
   }
   close(): void {
+    for (const gate of this.verificationMacs.values())
+      gate.reject(new Error('This browser session closed.'));
+    this.verificationMacs.clear();
     this.client.stopClient();
     for (const key of this.keys.values()) key.fill(0);
     this.keys.clear();

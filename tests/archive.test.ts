@@ -678,3 +678,54 @@ test('stopping a running worker waits for cleanup and permits immediate safe sto
     next.close();
   }
 });
+
+test('renaming split ZIP files preserves identities for records without provider IDs', async (t) => {
+  const { archive, input, root } = await context(t);
+  const image = await photo(root);
+  const parts = [
+    await zipBytes([
+      {
+        name: 'posts.json',
+        bytes: Buffer.from(
+          JSON.stringify([
+            {
+              data: [{ post: 'Same undated memory' }],
+              attachments: [{ data: [{ media: { uri: 'photos/synthetic.jpg' } }] }],
+            },
+          ]),
+        ),
+      },
+    ]),
+    await zipBytes([{ name: 'photos/synthetic.jpg', bytes: await readFile(image) }]),
+  ];
+  await writeFile(join(input, 'original-part-1.zip'), parts[0]!);
+  await writeFile(join(input, 'original-part-2.zip'), parts[1]!);
+  assert.equal((await archive.importDirectory('alice', input)).added, 1);
+  const before = archive.list('alice')[0]!;
+  await rm(join(input, 'original-part-1.zip'));
+  await rm(join(input, 'original-part-2.zip'));
+  await writeFile(join(input, 'renamed-z.zip'), parts[0]!);
+  await writeFile(join(input, 'renamed-a.zip'), parts[1]!);
+  const again = await archive.importDirectory('alice', input);
+  assert.equal(again.added, 0);
+  assert.equal(again.unchanged, 1);
+  assert.equal(archive.count('alice'), 1);
+  assert.equal(archive.list('alice')[0]!.id, before.id);
+  assert.equal(archive.list('alice')[0]!.mediaIds.length, 1);
+});
+
+test('overlapping inner paths across split ZIPs fail before any record is committed', async (t) => {
+  const { archive, input } = await context(t);
+  for (const n of [1, 2])
+    await writeFile(
+      join(input, `part-${n}.zip`),
+      await zipBytes([
+        {
+          name: 'posts.json',
+          bytes: Buffer.from(JSON.stringify([{ data: [{ post: `Different ${n}` }] }])),
+        },
+      ]),
+    );
+  await assert.rejects(archive.importDirectory('alice', input), /same internal path/);
+  assert.equal(archive.count('alice'), 0);
+});

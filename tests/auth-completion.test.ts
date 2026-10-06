@@ -33,10 +33,10 @@ async function fixture(t: test.TestContext) {
         : JSON.stringify(fields),
     });
   const poison = async (username: string) => {
-    // Ten genuine failed authentication attempts exhaust the normal username bucket.
-    for (let i = 0; i < 10; i++)
-      await assert.rejects(runtime.core.login(username, 'wrong password'), { status: 401 });
-    await assert.rejects(runtime.core.login(username, password), { status: 429 });
+    // Prospective usernames now use the shared unknown-account bucket. Seed the
+    // exact future account bucket to exercise completion during a real lockout.
+    for (let i = 0; i < 10; i++) runtime.core.rate(`login:${username}`, 10, 15 * 60_000);
+    assert.throws(() => runtime.core.rate(`login:${username}`, 10, 15 * 60_000), { status: 429 });
   };
   const completed = async (response: Response) => {
     assert.equal(response.status, 200, await response.clone().text());
@@ -69,6 +69,7 @@ test('setup and registration finish with a session and usable codes despite pois
       setupToken: (await readFile(f.setupPath, 'utf8')).trim(),
     }),
   );
+  await assert.rejects(f.core.login('owner', password), { status: 429 });
   const recovered = await f.core.recover('owner', owner.recoveryCodes[0], password);
   assert.equal(recovered.user.id, owner.user.id);
   const invite = f.core.createInvite(owner.user.id, 'registration');

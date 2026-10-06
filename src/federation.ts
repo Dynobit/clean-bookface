@@ -101,6 +101,8 @@ export class Federation {
       CREATE TABLE IF NOT EXISTS federation_deliveries(event_id TEXT PRIMARY KEY, sender TEXT NOT NULL, recipient TEXT NOT NULL,
         object_id TEXT NOT NULL, kind TEXT NOT NULL, wire_type TEXT, state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0,
         lease_until INTEGER NOT NULL DEFAULT 0, last_status INTEGER, updated_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS federation_first_attempt ON federation_deliveries(state,attempts,updated_at DESC,event_id);
+      CREATE INDEX IF NOT EXISTS federation_retry_due ON federation_deliveries(state,next_attempt,lease_until,updated_at,event_id);
       CREATE TABLE IF NOT EXISTS federation_received(activity_id TEXT NOT NULL, recipient TEXT NOT NULL, actor TEXT NOT NULL,
         body_hash TEXT NOT NULL, received_at INTEGER NOT NULL, PRIMARY KEY(activity_id,recipient));
       CREATE TABLE IF NOT EXISTS federation_rate(subject TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT NULL);
@@ -414,6 +416,14 @@ export class Federation {
       throw new Error('Missing revision');
     if (JSON.stringify(a['@context']) !== JSON.stringify(CONTEXT))
       throw new Error('Unsupported context');
+    if (
+      a.type === 'Follow' &&
+      a['cb:expiresAt'] !== undefined &&
+      (!Number.isSafeInteger(a['cb:expiresAt']) || Number(a['cb:expiresAt']) < 1)
+    )
+      throw new Error('Invalid friendship expiry');
+    if (a['cb:interactionId'] !== undefined) canonicalURL(a['cb:interactionId']);
+    if (a['cb:interactionActor'] !== undefined) canonicalURL(a['cb:interactionActor']);
     if (['Create', 'Update'].includes(String(a.type))) {
       const o = a.object;
       if (
@@ -432,6 +442,7 @@ export class Federation {
         'audience' in o
       )
         throw new Error('Invalid private object');
+      canonicalURL(o.id);
       if (!o.inReplyTo && canonicalURL(o.id).origin !== new URL(actor).origin)
         throw new Error('Object ownership mismatch');
       if (o.inReplyTo !== undefined) canonicalURL(o.inReplyTo);
@@ -489,7 +500,7 @@ export class Federation {
       }
       if (actorMatch?.[2]) {
         if (request.method !== 'POST') return fail(405);
-        const local = this.localActor(actorMatch[1]!);
+        const local = this.localActor(actorMatch[1]!, true);
         if (!local) return fail(404);
         if (
           !(request.headers.get('content-type') ?? '').startsWith(AP) ||
@@ -545,7 +556,7 @@ export class Federation {
         this.validateActivity(activity, actor, local.id);
         const hash = fingerprint(text);
         this.store.transaction(() => {
-          const current = this.localActor(actorMatch[1]!);
+          const current = this.localActor(actorMatch[1]!, REMOVALS.has(String(activity.type)));
           if (
             !this.active() ||
             !current ||
@@ -629,6 +640,7 @@ export class Federation {
           type: 'Follow',
           id: activityURL(p.requestId),
           object: event.recipientActor,
+          ...(p.expiresAt === undefined ? {} : { 'cb:expiresAt': p.expiresAt }),
         });
         break;
       case 'friend.accept':
@@ -762,7 +774,8 @@ export class Federation {
             .filter((e) => e.id <= cursor);
           events = [...events, ...wrapped];
         }
-        for (const e of events) {
+        const fresh = this.adapter.takeNewEvents?.(100) ?? [];
+        for (const e of [...fresh, ...events]) {
           this.store.db
             .prepare(
               'INSERT OR IGNORE INTO federation_deliveries(event_id,sender,recipient,object_id,kind,updated_at) VALUES(?,?,?,?,?,?)',
@@ -773,11 +786,23 @@ export class Federation {
           .prepare('UPDATE federation_scan SET cursor=? WHERE id=1')
           .run(events.length ? events[events.length - 1]!.id : '');
       });
-      const rows = this.store.db
+      type DueDelivery = { event_id: string; attempts: number };
+      // Reserve at most half the bounded send budget for recent first attempts.
+      // Run them before slow old peers, while keeping the remaining oldest-due
+      // slots for retries/older admission. Mandatory removals stay durable.
+      const first = this.store.db
+        .prepare(
+          "SELECT event_id,attempts FROM federation_deliveries WHERE state='pending' AND attempts=0 AND next_attempt<=? AND lease_until<=? ORDER BY updated_at DESC,event_id LIMIT ?",
+        )
+        .all(now, now, Math.ceil(limit / 2)) as DueDelivery[];
+      const oldest = this.store.db
         .prepare(
           "SELECT event_id,attempts FROM federation_deliveries WHERE state='pending' AND next_attempt<=? AND lease_until<=? ORDER BY updated_at,event_id LIMIT ?",
         )
-        .all(now, now, limit) as { event_id: string; attempts: number }[];
+        .all(now, now, limit) as DueDelivery[];
+      const selected = new Map(first.map((row) => [row.event_id, row]));
+      for (const row of oldest) if (selected.size < limit) selected.set(row.event_id, row);
+      const rows = [...selected.values()];
       for (const row of rows) {
         if (this.stopped) break;
         // Acquire in a transaction. Expired leases recover after a process dies.
@@ -846,6 +871,22 @@ export class Federation {
           });
           delivered++;
         } catch {
+          if (
+            event.kind === 'friend.accept' &&
+            [403, 410].includes(status) &&
+            this.adapter.rejectAcceptance
+          ) {
+            this.store.transaction(() => {
+              this.adapter.rejectAcceptance!(event.id);
+              this.store.db
+                .prepare(
+                  "UPDATE federation_deliveries SET state='failed',lease_until=0,last_status=?,attempts=attempts+1,updated_at=? WHERE event_id=?",
+                )
+                .run(status, this.now(), event.id);
+              this.adapter.ackEvent(event.id);
+            });
+            continue;
+          }
           const attempts = row.attempts + 1;
           // Never discard removals or content merely because the peer is offline.
           // The ledger exposes the pending state to the operator and survives restarts.

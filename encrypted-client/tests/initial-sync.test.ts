@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { freshInitialSyncFetch } from '../src/identity';
 
-test('initial sync nonce bypasses stale raw-filter cache without changing selection or request options', async () => {
+test('initial sync nonce bypasses stale raw-filter cache includes departed rooms without changing timeline or request options', async () => {
   const requests: { url: URL; init: RequestInit | undefined }[] = [];
   const fetcher: typeof fetch = async (input, init) => {
     requests.push({ url: new URL(String(input)), init });
@@ -29,7 +29,7 @@ test('initial sync nonce bypasses stale raw-filter cache without changing select
     second['org.cleanbookface.sync_instance'],
   );
   delete first['org.cleanbookface.sync_instance'];
-  assert.deepEqual(first, filter);
+  assert.deepEqual(first, { ...filter, room: { ...filter.room, include_leave: true } });
   assert.equal(requests[0].init, init);
   assert.equal(requests[0].url.searchParams.get('timeout'), '0');
   assert.equal(url.searchParams.get('filter'), JSON.stringify(filter));

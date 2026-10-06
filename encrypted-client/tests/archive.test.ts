@@ -173,3 +173,32 @@ test('encrypted entries and symlinks reject from ZIP metadata', async () => {
     );
   }
 });
+
+test('portable batches store identical media once without losing original attachment references', async () => {
+  const bytes = new Blob(['same synthetic media'], { type: 'image/jpeg' });
+  const records = ['first', 'second'].map((id) => ({
+    id,
+    kind: 'photo' as const,
+    timestamp: null,
+    text: id,
+    title: '',
+    sourcePath: 'photos.json',
+    privateOnly: false,
+    attachments: [{ path: `${id}.jpg`, mimeType: 'image/jpeg', bytes }],
+  }));
+  const output = await exportArchives(records);
+  const { ZipReader, BlobReader } = await import('@zip.js/zip.js');
+  const reader = new ZipReader(new BlobReader(output));
+  try {
+    assert.equal(
+      (await reader.getEntries()).filter((entry) => entry.filename.startsWith('media/')).length,
+      1,
+    );
+  } finally {
+    await reader.close();
+  }
+  assert.deepEqual(
+    (await importArchives([new File([output], 'archive.zip')])).records,
+    records.map((r) => ({ ...r, provenance: {} })),
+  );
+});

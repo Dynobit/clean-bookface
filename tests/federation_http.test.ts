@@ -389,6 +389,96 @@ test('two HTTPS applications preserve private photos, interactions and revocatio
       404,
     );
     assert.equal((await b!.federation.signedFetch('bob', secondURL)).status, 404);
+    // SUP02: deletion purges the last reader's cache while the author is offline.
+    const finalPost = a!.core.publish(alice.id, {
+      body: 'Purge on recipient deletion',
+      audience: 'selected',
+      recipientActors: [bob.actor],
+    });
+    await a!.federation.flush();
+    const finalURL = a!.core.objectUrl(finalPost.id);
+    assert.equal(b!.core.post(finalURL, bob.id).body, 'Purge on recipient deletion');
+    // SUP03: even correctly signed replies/likes cannot introduce identities
+    // that the deletion envelope would later reject.
+    for (const suffix of ['?query=1', '#fragment']) {
+      for (const kind of ['reply', 'like']) {
+        const activity = {
+          '@context': CONTEXT,
+          'cb:profile': PROFILE,
+          'cb:revision': 1,
+          id: `${origins[1]}/federation/activities/${randomUUID()}`,
+          actor: bob.actor,
+          to: [alice.actor],
+          ...(kind === 'reply'
+            ? {
+                type: 'Create',
+                object: {
+                  id: `${origins[1]}/federation/comments/bad${suffix}`,
+                  type: 'Note',
+                  attributedTo: bob.actor,
+                  inReplyTo: finalURL,
+                  to: [alice.actor],
+                  mediaType: 'text/plain',
+                  content: 'Invalid identity',
+                },
+              }
+            : {
+                type: 'Like',
+                object: finalURL,
+                'cb:interactionId': `${origins[1]}/federation/activities/bad${suffix}`,
+              }),
+        };
+        const signed = await b!.federation.sign(
+          'bob',
+          new Request(`${alice.actor}/inbox`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/activity+json' },
+            body: JSON.stringify(activity),
+          }),
+        );
+        assert.equal((await network(signed)).status, 403);
+      }
+    }
+    b!.core.transferAdministration(bob.id, charlie.id);
+    offlineOrigin = origins[0];
+    b!.core.deleteAccount(bob.id);
+    assert.equal(
+      (b!.store.db.prepare('SELECT body FROM publications WHERE id=?').get(finalURL) as any).body,
+      '',
+    );
+    offlineOrigin = undefined;
+    a!.core.revokeRecipients(alice.id, finalPost.id, [bob.actor]);
+    assert.ok((await a!.federation.flush()).delivered >= 1);
+    const removal = a!.store.db
+      .prepare(
+        "SELECT state,last_status FROM federation_deliveries WHERE object_id=? AND kind='post.revoke'",
+      )
+      .get(finalPost.id) as any;
+    assert.equal(removal.state, 'delivered');
+    assert.equal(removal.last_status, 202);
+    const newFollow = {
+      '@context': CONTEXT,
+      'cb:profile': PROFILE,
+      'cb:revision': 1,
+      id: `${origins[0]}/federation/activities/${randomUUID()}`,
+      type: 'Follow',
+      actor: alice.actor,
+      to: [bob.actor],
+      object: bob.actor,
+    };
+    const signedFollow = await a!.federation.sign(
+      'alice',
+      new Request(`${bob.actor}/inbox`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/activity+json' },
+        body: JSON.stringify(newFollow),
+      }),
+    );
+    assert.equal(
+      (await network(signedFollow)).status,
+      403,
+      'deleted recipient never accepts fresh content or consent',
+    );
   } finally {
     for (const server of servers)
       await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -284,3 +284,67 @@ test('final text-only import transaction rechecks durable owner deletion before 
   assert.equal(workerArchive.count('owner'), 0);
   assert.equal(store.db.prepare('SELECT count(*) n FROM archive_stage').get()!.n, 0);
 });
+
+test('deleting the previous memory during reuse retains staged media and the new export remains portable', async (t) => {
+  const { store, archive, input, root } = await fixture(t);
+  await sharp({ create: { width: 12, height: 8, channels: 3, background: '#436587' } })
+    .png()
+    .toFile(join(input, 'photo.png'));
+  await writeFile(
+    join(input, 'posts.json'),
+    JSON.stringify([record('old', 'Old memory', 'photo.png')]),
+  );
+  await archive.importDirectory('owner', input);
+  const old = archive.list('owner')[0]!;
+  await writeFile(
+    join(input, 'posts.json'),
+    JSON.stringify([record('new', 'New memory', 'photo.png')]),
+  );
+  const transaction = store.transaction.bind(store);
+  let removed = false;
+  t.mock.method(store, 'transaction', function <T>(fn: () => T): T {
+    if (!removed && Number(store.db.prepare('SELECT count(*) n FROM archive_stage').get()!.n) > 0) {
+      removed = true;
+      assert.equal(archive.deleteItem('owner', old.id), true);
+    }
+    return transaction(fn);
+  });
+  const result = await archive.importDirectory('owner', input);
+  assert.equal(removed, true);
+  assert.equal(result.added, 1);
+  const saved = archive.list('owner')[0]!;
+  assert.equal(saved.body, 'New memory');
+  assert.equal(saved.mediaIds.length, 1);
+  assert.ok(archive.media('owner', saved.mediaIds[0]!));
+  const chunks: Buffer[] = [];
+  for await (const bytes of archive.exportZip('owner')) chunks.push(Buffer.from(bytes));
+  const exported = join(root, 'portable.zip');
+  await writeFile(exported, Buffer.concat(chunks));
+  await archive.importZip('reader', exported);
+  const recovered = archive.list('reader')[0]!;
+  assert.equal(recovered.body, saved.body);
+  assert.equal(recovered.mediaIds.length, 1);
+  assert.ok(archive.media('reader', recovered.mediaIds[0]!));
+});
+
+test('final commit refuses a staged reference whose media row disappeared', async (t) => {
+  const { store, archive, input } = await fixture(t);
+  await sharp({ create: { width: 12, height: 8, channels: 3, background: '#436587' } })
+    .png()
+    .toFile(join(input, 'photo.png'));
+  await writeFile(
+    join(input, 'posts.json'),
+    JSON.stringify([record('new', 'New memory', 'photo.png')]),
+  );
+  const transaction = store.transaction.bind(store);
+  let removed = false;
+  t.mock.method(store, 'transaction', function <T>(fn: () => T): T {
+    if (!removed && Number(store.db.prepare('SELECT count(*) n FROM archive_stage').get()!.n) > 0) {
+      removed = true;
+      store.db.prepare('DELETE FROM archive_media WHERE owner_id=?').run('owner');
+    }
+    return transaction(fn);
+  });
+  await assert.rejects(archive.importDirectory('owner', input), /photo changed during import/);
+  assert.equal(archive.count('owner'), 0);
+});

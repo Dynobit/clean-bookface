@@ -43,6 +43,8 @@ def login(state, username, password):
     return data['access_token']
 
 def invite(state, expiry=3600, admin_token=None):
+    if not isinstance(expiry, int) or not 1 <= expiry <= 7 * 86400:
+        raise ValueError('Invitation expiry must be between one second and seven days')
     admin = json.loads((state['runtime'] / 'admin.json').read_text())
     token = admin_token or login(state, admin['username'], admin['password'])
     status, data = request(state, '/_synapse/admin/v1/registration_tokens/new', {'uses_allowed':1, 'expiry_time':int((time.time()+expiry)*1000)}, token)
@@ -160,6 +162,13 @@ def initialize(args):
       'postgres':{'image':pins['postgres'],'environment':{'POSTGRES_USER':'synapse','POSTGRES_DB':'synapse','POSTGRES_PASSWORD_FILE':'/run/secrets/postgres-password','POSTGRES_INITDB_ARGS':'--encoding=UTF8 --locale=C'},'secrets':['postgres-password'],'volumes':['postgres:/var/lib/postgresql/data'],'networks':['private'],'healthcheck':{'test':['CMD-SHELL','pg_isready -h 127.0.0.1 -U synapse -d synapse'],'interval':'3s','timeout':'3s','retries':30},'restart':'unless-stopped' if args.mode == 'production' else 'no'},
       'synapse':{'image':pins['synapse'],'user':synapse_user(),'environment':{'SYNAPSE_CONFIG_PATH':'/data/homeserver.yaml'},'volumes':[str(runtime / 'synapse')+':/data'],'ports':[f'127.0.0.1:{args.port}:8008'],'networks':['private','client'],'depends_on':{'postgres':{'condition':'service_healthy'}},'restart':'unless-stopped' if args.mode == 'production' else 'no'}},
       'secrets':{'postgres-password':{'file':str(runtime/'postgres-password')}},'volumes':{'postgres':{}},'networks':{'private':{'internal':True},'client':{}}}
+    for name, memory, pids in [('synapse', '1536m', 256), ('postgres', '768m', 128)]:
+        spec['services'][name].update(cap_drop=['ALL'], security_opt=['no-new-privileges:true'],
+                                     mem_limit=memory, pids_limit=pids,
+                                     logging={'driver':'json-file','options':{'max-size':'10m','max-file':'3'}})
+    # Official postgres entrypoint initializes/chowns its named volume as root,
+    # then uses gosu; these are the only retained bootstrap capabilities.
+    spec['services']['postgres']['cap_add'] = ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID']
     prepare_synapse_ownership(runtime, spec)
     write(runtime/'compose.json',spec)
     write(runtime/'state.json',{**state,'runtime':str(runtime)})
@@ -188,19 +197,24 @@ def main():
     parser.add_argument('--test-rate-profile',action='store_true',help='Local-only: bounded higher successful-login/address capacity for browser automation; failed-login limits unchanged')
     parser.add_argument('--imported-images',action='store_true',help='Local-only, verified official imported manifest digests after save/load')
     parser.add_argument('--mode',choices=['local','production'],default='local')
+    parser.add_argument('--expiry-hours', type=int, default=1)
     parser.add_argument('--server-name',default='encrypted.test'); parser.add_argument('--public-url'); parser.add_argument('--port',type=int,default=18008)
     args=parser.parse_args()
     if args.action=='bootstrap': return initialize(args)
     state=json.loads((args.runtime/'state.json').read_text()); state['runtime']=args.runtime.resolve()
     if not re.fullmatch(r'cbf-e2ee-[a-f0-9]{10}',state['project']): raise RuntimeError('Invalid project marker')
-    if args.action=='status': compose(state,'ps'); print('Client HTTP status:',request(state,'/_matrix/client/versions')[0])
+    if args.action=='status':
+        compose(state,'ps')
+        import operations
+        print('Backup health:',json.dumps(operations.health(state)))
+        print('Client HTTP status:',request(state,'/_matrix/client/versions')[0])
     elif args.action=='start': compose(state,'up','-d'); ready(state)
     elif args.action=='stop': compose(state,'stop')
     elif args.action=='destroy-local':
         if state['mode']!='local': raise RuntimeError('Refusing production volume deletion')
         compose(state,'down','--volumes'); print('Exact local project removed; runtime secret files retained for explicit operator deletion')
     elif args.action=='invite':
-        write(state['runtime']/'invitation.json',invite(state)); print('Single-use, one-hour invitation saved privately in runtime/invitation.json')
+        write(state['runtime']/'invitation.json',invite(state, expiry=args.expiry_hours * 3600)); print('Single-use invitation with selected expiry saved privately in runtime/invitation.json')
     elif args.action=='check':
         assert request(state,'/_matrix/client/versions')[0]==200
         code,data=request(state,'/_matrix/client/v3/register',{'username':'uninvited','password':secrets.token_urlsafe(20)})

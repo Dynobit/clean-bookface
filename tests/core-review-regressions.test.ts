@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { Store } from '../src/storage.js';
 import { Federation, type FederationAdapter } from '../src/federation.js';
 import type { FederationNetwork } from '../src/federation/network.js';
@@ -413,4 +413,293 @@ test('own replies paginate by timestamp and identity and never list another acco
   assert.deepEqual(new Set([...first, ...second].map((row) => row.id)), new Set([one.id, two.id]));
   core.revokeRecipients(alice.id, post.id, [bob.actor]);
   assert.ok(core.ownComments(bob.id).every((row) => !row.postAvailable));
+});
+
+test('SUP02 last local reader removal purges remote cached content without contacting author', async (t) => {
+  const a = await circle(t, 'https://a.example'),
+    b = await circle(t, 'https://b.example');
+  await remoteFriends(a, b, b.alice);
+  const post = a.core.publish(a.alice.id, { body: 'Remote private text', audience: 'friends' });
+  const id = a.core.objectUrl(post.id);
+  b.core.receiveActivity(
+    b.alice.id,
+    a.alice.actor,
+    envelope(a.alice.actor, b.alice.actor, 'Create', a.core.federationObject(id, b.alice.actor)),
+  );
+  b.core.unfriend(b.alice.id, a.alice.actor);
+  const row = b.store.db
+    .prepare('SELECT body,media_ids FROM publications WHERE id=?')
+    .get(id) as any;
+  assert.equal(row.body, '');
+  assert.equal(row.media_ids, '[]');
+});
+
+test('SUP03 incoming reply query identity is rejected before storing an unremovable comment', async (t) => {
+  const a = await circle(t, 'https://a.example'),
+    b = await circle(t, 'https://b.example');
+  await remoteFriends(a, b, b.alice);
+  const post = a.core.publish(a.alice.id, { body: 'Thread', audience: 'friends' });
+  const object = {
+    id: `${b.core.origin}/comments/reply?query=1`,
+    type: 'Note',
+    attributedTo: b.alice.actor,
+    inReplyTo: a.core.objectUrl(post.id),
+    to: [a.alice.actor],
+    mediaType: 'text/plain',
+    content: 'Reply',
+  };
+  denied(
+    () =>
+      a.core.receiveActivity(
+        a.alice.id,
+        b.alice.actor,
+        envelope(b.alice.actor, a.alice.actor, 'Create', object),
+      ),
+    400,
+  );
+});
+
+test('SUP05 delayed remote request honors the earlier sender expiry', async (t) => {
+  const b = await circle(t, 'https://b.example');
+  const actor = 'https://a.example/users/alice';
+  const expiry = Date.parse('2026-10-03T12:00:00Z');
+  const request = envelope(actor, b.alice.actor, 'Follow', b.alice.actor, {
+    'cb:expiresAt': expiry,
+  });
+  b.core.receiveActivity(b.alice.id, actor, request);
+  b.tick(2 * 86400000);
+  denied(() => b.core.acceptFriend(b.alice.id, request.id));
+});
+
+async function supplementPeers(t: test.TestContext) {
+  const a = await circle(t, 'https://alpha.example'),
+    b = await circle(t, 'https://beta.example');
+  const peers = new Map<string, Federation>();
+  const network: FederationNetwork = async (request) => {
+    const response = await peers.get(new URL(request.url).origin)!.handle(request);
+    assert.ok(response);
+    return {
+      status: response.status,
+      headers: response.headers,
+      body: new Uint8Array(await response.arrayBuffer()),
+    };
+  };
+  for (const c of [a, b]) {
+    const core = c.core;
+    const adapter: FederationAdapter = {
+      localActor: (n) => core.localActor(n),
+      pendingEvents: (n, id) => core.pendingEvents(n, id),
+      takeNewEvents: (n) => core.takeNewEvents(n),
+      rejectAcceptance: (id) => core.rejectAcceptance(id),
+      outboundEvent: (id) => core.outboundEvent(id),
+      ackEvent: (id) => core.ackEvent(id),
+      receiveActivity: (id, actor, activity) => core.receiveActivity(id, actor, activity),
+      federationObject: (id, actor) => core.federationObject(id, actor),
+      federationMedia: () => null,
+    };
+    peers.set(
+      core.origin,
+      new Federation(c.store, adapter, { origin: core.origin, enabled: true, network }),
+    );
+  }
+  return { a, b, fa: peers.get(a.core.origin)!, fb: peers.get(b.core.origin)!, network };
+}
+
+test('SUP02 suspended recipient accepts only authenticated removals and cached content retains another reader', async (t) => {
+  const { a, b, fa, fb } = await supplementPeers(t);
+  const bob = await b.register('bob'),
+    carol = await b.register('carol');
+  for (const user of [bob, carol]) {
+    a.core.requestFriend(a.alice.id, user.actor);
+    await fa.flush();
+    b.core.acceptFriend(user.id, b.core.pendingFriends(user.id)[0]!.id);
+    await fb.flush();
+  }
+  const post = a.core.publish(a.alice.id, { body: 'Two local readers', audience: 'friends' });
+  await fa.flush();
+  const id = a.core.objectUrl(post.id);
+  b.core.suspend(b.alice.id, bob.id);
+  assert.equal(b.core.post(id, carol.id).body, 'Two local readers');
+  a.core.revokeRecipients(a.alice.id, post.id, [bob.actor]);
+  assert.ok((await fa.flush()).delivered >= 1);
+  b.core.unfriend(carol.id, a.alice.actor);
+  assert.equal(
+    (b.store.db.prepare('SELECT body FROM publications WHERE id=?').get(id) as any).body,
+    '',
+  );
+  const request = envelope(a.alice.actor, bob.actor, 'Follow', bob.actor);
+  denied(() => b.core.receiveActivity(bob.id, a.alice.actor, request), 403);
+});
+
+test('SUP05 signed expiry propagation and terminal Accept refusal reconcile local consent and queued sharing', async (t) => {
+  const { a, b, fa, fb } = await supplementPeers(t);
+  const request = a.core.requestFriend(a.alice.id, b.alice.actor);
+  b.tick(3 * 86400000);
+  await fa.flush();
+  const incoming = b.core.pendingFriends(b.alice.id)[0]!;
+  assert.equal(incoming.expiresAt, a.core.pendingFriends(a.alice.id)[0]!.expiresAt);
+  b.core.acceptFriend(b.alice.id, incoming.id);
+  const post = b.core.publish(b.alice.id, {
+    body: 'Must not leave after failed acceptance',
+    audience: 'friends',
+  });
+  // Sender expires its request before the queued acceptance arrives.
+  a.tick(8 * 86400000);
+  await fb.flush();
+  assert.equal(b.core.friends(b.alice.id).length, 0);
+  assert.ok(b.core.notifications(b.alice.id).some((n) => n.kind === 'friend.failed'));
+  const delivery = b.store.db
+    .prepare("SELECT state,last_status FROM federation_deliveries WHERE kind='friend.accept'")
+    .get() as any;
+  assert.equal(delivery.state, 'failed');
+  assert.equal(delivery.last_status, 403);
+  const event = b.store.db
+    .prepare("SELECT id FROM domain_events WHERE object_id=? AND kind='post.create'")
+    .get(post.id) as any;
+  assert.equal(b.core.outboundEvent(event.id), null);
+  assert.equal(a.core.friends(a.alice.id).length, 0);
+  assert.equal(
+    (a.store.db.prepare('SELECT state FROM friendships WHERE id=?').get(request) as any).state,
+    'pending',
+  );
+});
+
+test('SUP07 new event admission is bounded despite fifty thousand durable stuck deliveries', async (t) => {
+  const { a, fa } = await supplementPeers(t);
+  const insert = a.store.db.prepare(
+    "INSERT INTO domain_events(id,kind,actor,recipient_actor,object_id,revision,payload,created_at) VALUES(?,'post.revoke',?,?,'old-object',1,'{}',1)",
+  );
+  const delivery = a.store.db.prepare(
+    "INSERT INTO federation_deliveries(event_id,sender,recipient,object_id,kind,updated_at,next_attempt) VALUES(?,?,?,'old-object','post.revoke',1,9999999999999)",
+  );
+  a.store.transaction(() => {
+    for (let i = 0; i < 50000; i++) {
+      const id = `old-${String(i).padStart(5, '0')}`;
+      insert.run(id, a.alice.actor, 'https://offline.example/users/member');
+      delivery.run(id, a.alice.actor, 'https://offline.example/users/member');
+      a.store.db.prepare('INSERT INTO domain_admission(event_id) VALUES(?)').run(id);
+    }
+  });
+  const request = a.core.requestFriend(a.alice.id, 'https://beta.example/users/alice');
+  const event = a.store.db
+    .prepare('SELECT id FROM domain_events WHERE object_id=?')
+    .get(request) as any;
+  const began = performance.now();
+  await fa.flush(1);
+  const admitted = a.store.db
+    .prepare('SELECT state FROM federation_deliveries WHERE event_id=?')
+    .get(event.id) as any;
+  assert.ok(admitted);
+  assert.equal(admitted.state, 'delivered');
+  assert.equal(
+    (
+      a.store.db
+        .prepare(
+          "SELECT count(*) n FROM federation_deliveries WHERE kind='post.revoke' AND state='pending'",
+        )
+        .get() as any
+    ).n,
+    50000,
+  );
+  assert.ok(
+    performance.now() - began < 5000,
+    'one bounded flush admits new event without cycling the backlog',
+  );
+});
+
+test('unknown login and recovery names share bounded buckets without locking a real member', async (t) => {
+  const { core, store, recoveryCodes, alice } = await circle(t);
+  for (let i = 0; i < 75; i++) {
+    await assert.rejects(core.login(`unknown${i}`, password));
+    await assert.rejects(core.recover(`unknown${i}`, 'invalid-code', password));
+  }
+  const buckets = store.db.prepare('SELECT key FROM rate_buckets ORDER BY key').all() as {
+    key: string;
+  }[];
+  assert.deepEqual(
+    buckets.map((row) => row.key),
+    ['login:unknown', 'recover:unknown']
+      .map((key) => createHash('sha256').update(key).digest('hex'))
+      .sort(),
+  );
+  assert.equal((await core.login('alice', password)).user.id, alice.id);
+  assert.equal((await core.recover('alice', recoveryCodes[0]!, password)).user.id, alice.id);
+  for (let i = 0; i < 4; i++)
+    await assert.rejects(
+      core.recover('alice', 'invalid', password),
+      (e) => e instanceof CoreError && e.status === 401,
+    );
+  await assert.rejects(
+    core.recover('alice', 'invalid', password),
+    (e) => e instanceof CoreError && e.status === 429,
+  );
+});
+
+test('new peer first delivery precedes fifty thousand already-due black-holed retries while retry slots remain', async (t) => {
+  const { a, fa, network } = await supplementPeers(t);
+  const insert = a.store.db.prepare(
+    "INSERT INTO domain_events(id,kind,actor,recipient_actor,object_id,revision,payload,created_at) VALUES(?,'post.revoke',?,?,'old-object',1,'{\"postId\":\"old-object\"}',1)",
+  );
+  const delivery = a.store.db.prepare(
+    "INSERT INTO federation_deliveries(event_id,sender,recipient,object_id,kind,attempts,updated_at,next_attempt) VALUES(?,?,?,'old-object','post.revoke',1,1,0)",
+  );
+  a.store.transaction(() => {
+    for (let i = 0; i < 50000; i++) {
+      const id = `retry-${String(i).padStart(5, '0')}`;
+      insert.run(id, a.alice.actor, 'https://offline.example/users/member');
+      delivery.run(id, a.alice.actor, 'https://offline.example/users/member');
+    }
+  });
+  let release!: () => void, started!: () => void;
+  let slowAttempts = 0;
+  const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    slowStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+  (fa as any).network = async (request: Request, maxBytes?: number) => {
+    if (new URL(request.url).origin === 'https://offline.example') {
+      slowAttempts++;
+      started();
+      await blocked;
+      throw new Error('Synthetic black-holed peer timeout');
+    }
+    return network(request, maxBytes);
+  };
+  const request = a.core.requestFriend(a.alice.id, 'https://beta.example/users/alice');
+  const event = a.store.db
+    .prepare('SELECT id FROM domain_events WHERE object_id=?')
+    .get(request) as any;
+  const began = performance.now(),
+    flushing = fa.flush(2);
+  try {
+    await slowStarted;
+    assert.equal(
+      (
+        a.store.db
+          .prepare('SELECT state FROM federation_deliveries WHERE event_id=?')
+          .get(event.id) as any
+      ).state,
+      'delivered',
+      'new peer completes before any slow retry timeout is released',
+    );
+    assert.equal(slowAttempts, 1, 'old retry still receives its reserved slot');
+    t.diagnostic(
+      `dueBacklog=50000 firstDeliveryBeforeTimeoutMs=${(performance.now() - began).toFixed(1)}`,
+    );
+  } finally {
+    release();
+    await flushing;
+  }
+  assert.equal(
+    (
+      a.store.db
+        .prepare(
+          "SELECT count(*) n FROM federation_deliveries WHERE kind='post.revoke' AND state='pending'",
+        )
+        .get() as any
+    ).n,
+    50000,
+  );
 });

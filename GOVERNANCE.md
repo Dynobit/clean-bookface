@@ -2,7 +2,7 @@
 
 Clean Bookface should belong to the people who keep it useful. Nobody should have to trust a founder forever just to keep their own memories.
 
-**Current state:** an owner-maintained v0.1 public-preview project under the Dynobit GitHub account, not an established community foundation. The owner has approved source and project-website publication. No community maintainers, fiscal sponsor or successor organization have been appointed by this document. Transfer of accounts remains an explicit owner decision. The commitments below guide that transition.
+**Current state:** an owner-maintained project with a v0.2 encrypted preview and a separate v0.1 application under the Dynobit GitHub account, not an established community foundation. The owner has approved source and project-website publication. No community maintainers, fiscal sponsor or successor organization have been appointed by this document. Transfer of accounts remains an explicit owner decision. The commitments below guide that transition.
 
 ## What contributors are looking after
 

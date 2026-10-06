@@ -11,6 +11,8 @@ export function federationAdapter(
   return {
     localActor: (username) => core.localActor(username),
     pendingEvents: (limit, afterId) => core.pendingEvents(limit, afterId),
+    takeNewEvents: (limit) => core.takeNewEvents(limit),
+    rejectAcceptance: (id) => core.rejectAcceptance(id),
     outboundEvent: (id) => core.outboundEvent(id),
     ackEvent: (id) => core.ackEvent(id),
     receiveActivity: (recipient, actor, activity) =>

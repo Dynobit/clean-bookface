@@ -34,6 +34,9 @@ export interface DomainEvent {
 export interface FederationAdapter {
   localActor(username: string): LocalActor | null;
   pendingEvents(limit: number, afterId?: string): DomainEvent[];
+  /** Called within the admission transaction, separately from retry scans. */
+  takeNewEvents?(limit: number): DomainEvent[];
+  rejectAcceptance?(eventId: string): void;
   outboundEvent(id: string): DomainEvent | null;
   ackEvent(id: string): void;
   /** Called synchronously inside same SQLite transaction as transport dedupe.

@@ -102,7 +102,17 @@ test('actual legacy HTTP export survives encrypted browser migration, device del
           .fill(recovery.replace(/\s/g, '').slice(-6));
         await page.getByRole('button', { name: 'I saved it. Open my book.', exact: true }).click();
       }
-      await ready(page, 'button:has-text("My memories")');
+      await Promise.race([
+        page
+          .getByRole('button', { name: 'My memories', exact: true })
+          .waitFor({ state: 'visible', timeout: 65000 }),
+        page
+          .locator('#notice.error')
+          .waitFor({ state: 'visible', timeout: 65000 })
+          .then(async () => {
+            throw new Error(await page.locator('#notice').innerText());
+          }),
+      ]);
       return recovery!;
     };
     const page = await first.newPage(),

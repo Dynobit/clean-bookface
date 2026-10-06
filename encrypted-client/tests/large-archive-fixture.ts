@@ -136,3 +136,104 @@ export async function diskBackedFixtureFile(path: string): Promise<File> {
   });
   return file as unknown as File;
 }
+
+/** v0.1 archive/account formats, with actual disk-backed bytes and deterministic original IDs. */
+export async function largeLegacyArchiveFixture(directory: string, payloadBytes: number) {
+  if (!Number.isSafeInteger(payloadBytes) || payloadBytes < 1 || payloadBytes > 4 * 1024 ** 3)
+    throw new Error('Invalid legacy qualification size');
+  const space = await statfs(directory);
+  if (space.bavail * space.bsize < payloadBytes * 3 + 5 * 1024 ** 3)
+    throw new Error('Insufficient disk space for encrypted nested-archive qualification');
+  const path = join(directory, 'legacy-archive.zip'),
+    accountPath = join(directory, 'legacy-account.zip');
+  const archive = await open(path, 'wx', 0o600);
+  const writer = new ZipWriter(
+    new WritableStream<Uint8Array>({
+      write: async (chunk) => {
+        await archive.writeFile(chunk);
+      },
+    }),
+    { useWebWorkers: false, zip64: true },
+  );
+  const media = [],
+    rows = [],
+    expected = new Map<string, { sha256: string; size: number }>();
+  const sample = Buffer.alloc(16 * 1024 ** 2, 71);
+  // Level zero makes these actual 2 GiB bytes, never a compression-ratio bypass.
+  try {
+    for (let offset = 0, i = 0; offset < payloadBytes; i++) {
+      const size = Math.min(sample.length, payloadBytes - offset),
+        id = `legacy-${i}`,
+        mediaId = `media-${i}`;
+      sample.writeUInt32BE(i, 8);
+      const bytes = sample.subarray(0, size),
+        sha256 = createHash('sha256').update(bytes).digest('hex');
+      const file = `media/${mediaId}.original`;
+      await writer.add(file, new BlobReader(new Blob([bytes])), { level: 0 });
+      media.push({ id: mediaId, file, purpose: 'original', mime: 'image/jpeg', size, sha256 });
+      rows.push({
+        id,
+        sourceKey: createHash('sha256').update(id).digest('hex'),
+        kind: 'photo',
+        version: 1,
+        body: `SYNTHETIC_LEGACY_${i}`,
+        title: '',
+        source: 'synthetic/photos.json',
+        occurredAt: 946684800000 + i,
+        importedAt: 1000,
+        mediaIds: [mediaId],
+        metadata: {},
+      });
+      expected.set(id, { sha256, size });
+      offset += size;
+    }
+    await writer.add(
+      'manifest.json',
+      new BlobReader(new Blob([JSON.stringify({ format: 'clean-bookface-archive/1', media })])),
+      { level: 0 },
+    );
+    await writer.add(
+      'archive.ndjson',
+      new BlobReader(new Blob([rows.map((row) => JSON.stringify(row)).join('\n')])),
+      { level: 0 },
+    );
+    await writer.add('revisions.ndjson', new BlobReader(new Blob([])), { level: 0 });
+    await writer.close();
+  } finally {
+    await archive.close();
+  }
+  const outer = await open(accountPath, 'wx', 0o600);
+  const accountWriter = new ZipWriter(
+    new WritableStream<Uint8Array>({
+      write: async (chunk) => {
+        await outer.writeFile(chunk);
+      },
+    }),
+    { useWebWorkers: false, zip64: true },
+  );
+  try {
+    await accountWriter.add(
+      'account.json',
+      new BlobReader(
+        new Blob([
+          JSON.stringify({
+            format: 'clean-bookface-account/1',
+            account: { actor: 'https://example.org/synthetic' },
+            publications: [],
+            comments: [],
+          }),
+        ]),
+      ),
+      { level: 0 },
+    );
+    await accountWriter.add(
+      'private-archive.zip',
+      new BlobReader(await diskBackedFixtureFile(path)),
+      { level: 0 },
+    );
+    await accountWriter.close();
+  } finally {
+    await outer.close();
+  }
+  return { path: accountPath, expected, payloadBytes, zipBytes: (await stat(accountPath)).size };
+}

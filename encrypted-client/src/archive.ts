@@ -67,7 +67,7 @@ function mediaPaths(value: unknown): string[] {
     const next = stack.pop();
     if (!next || typeof next !== 'object') continue;
     if (Array.isArray(next)) {
-      stack.push(...next);
+      for (const child of next) stack.push(child);
       continue;
     }
     for (const [key, v] of Object.entries(next)) {
@@ -78,10 +78,55 @@ function mediaPaths(value: unknown): string[] {
   }
   return [...result];
 }
-/** Preserve decoded Unicode exactly. Facebook mojibake is never repaired by guessing. */
-export function parseFacebook(value: unknown, filename: string): NormalizedRecord[] {
+/** Index source evidence once. Each candidate UTF8 sequence has at most four
+ * bytes, so lookup never rescans the complete JSON for each distinct character. */
+function facebookTextRepair(source: string): (value: string) => string {
+  const literal = new Set<number>(),
+    escaped = new Set<number>(),
+    cache = new Map<string, string>();
+  const length = (lead: number) => (lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4);
+  const key = (bytes: number[]) => bytes.reduce((n, b) => n * 256 + b, 0);
+  for (const match of source.matchAll(/[\u00c2-\u00f4][\u0080-\u00bf]+/gu)) {
+    const run = match[0],
+      size = length(run.charCodeAt(0));
+    if (run.length >= size)
+      literal.add(key(Array.from(run.slice(0, size), (c) => c.charCodeAt(0))));
+  }
+  for (const match of source.matchAll(
+    /\\u00(?:c[2-9a-f]|[de][0-9a-f]|f[0-4])(?:\\u00[89ab][0-9a-f]){1,3}/gi,
+  )) {
+    let preceding = 0;
+    for (let i = match.index - 1; i >= 0 && source[i] === '\\'; i--) preceding++;
+    if (preceding % 2) continue; // A quoted literal backslash is not a JSON Unicode escape.
+    const bytes: number[] = [];
+    for (let i = 0; i < match[0].length; i += 6)
+      bytes.push(parseInt(match[0].slice(i + 4, i + 6), 16));
+    const size = length(bytes[0]);
+    if (bytes.length >= size) escaped.add(key(bytes.slice(0, size)));
+  }
+  return (value) =>
+    value.replace(/[\u00c2-\u00f4][\u0080-\u00bf]+/gu, (run) => {
+      if (run.length !== length(run.charCodeAt(0))) return run;
+      const cached = cache.get(run);
+      if (cached !== undefined) return cached;
+      const bytes = Array.from(run, (c) => c.charCodeAt(0)),
+        code = key(bytes);
+      let repaired = run;
+      if (!literal.has(code) && escaped.has(code)) {
+        try {
+          repaired = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes));
+        } catch {
+          /* Invalid UTF8 remains exact. */
+        }
+      }
+      cache.set(run, repaired);
+      return repaired;
+    });
+}
+export function parseFacebook(value: unknown, filename: string, rawJson = ''): NormalizedRecord[] {
   validateStructure(value);
   const root = obj(value);
+  const display = facebookTextRepair(rawJson);
   const lower = filename.toLowerCase();
   const result: NormalizedRecord[] = [];
   const counters = new Map<string, number>();
@@ -126,13 +171,13 @@ export function parseFacebook(value: unknown, filename: string): NormalizedRecor
     );
     result.push({
       kind,
-      body,
-      title: title || str(r.title) || str(r.name),
+      body: display(body),
+      title: display(title || str(r.title) || str(r.name)),
       occurredAt,
       sourceKey,
       source: filename,
       metadata: { original: input, ...(context ? { context } : {}) },
-      mediaPaths: kind === 'friend' ? [] : mediaPaths(input),
+      mediaPaths: kind === 'friend' || kind === 'album' ? [] : mediaPaths(input),
       ambiguous: !hasId,
     });
   }
@@ -140,15 +185,68 @@ export function parseFacebook(value: unknown, filename: string): NormalizedRecor
     const context =
       str(root.thread_path) || str(root.thread_id) || filename.replace(/\/message_\d+\.json$/u, '');
     root.messages.forEach((r, i) => add('message', r, i, context, str(root.title)));
+    // Chunk independently inside each source file: bounded metadata and stable reselection.
+    // Original messages and source identities are preserved, including attachment-only messages.
+    const messages = result.splice(0);
+    let chunk: NormalizedRecord[] = [],
+      size = 0;
+    const flush = () => {
+      if (!chunk.length) return;
+      const first = chunk[0];
+      result.push({
+        ...first,
+        sourceKey:
+          chunk.length === 1 ? first.sourceKey : `message-chunk\0${filename}\0${first.sourceKey}`,
+        body:
+          chunk.length === 1
+            ? first.body
+            : chunk
+                .map((m) => `${display(str(obj(m.metadata.original).sender_name))}: ${m.body}`)
+                .join('\n\n'),
+        mediaPaths: [...new Set(chunk.flatMap((m) => m.mediaPaths))],
+        metadata: {
+          context,
+          original: chunk.map((m) => m.metadata.original),
+          messageCount: chunk.length,
+          messageSourceKeys: chunk.map((m) => m.sourceKey),
+        },
+      });
+      chunk = [];
+      size = 0;
+    };
+    for (const message of messages) {
+      const bytes = new TextEncoder().encode(JSON.stringify(message)).length;
+      // Media-bearing messages stand alone so unrelated attachments cannot overfill a chunk.
+      if (
+        chunk.length &&
+        (chunk.length >= 100 ||
+          size + bytes > 256 * 1024 ||
+          message.mediaPaths.length ||
+          chunk[0].mediaPaths.length)
+      )
+        flush();
+      chunk.push(message);
+      size += bytes;
+    }
+    flush();
   } else if (root.friends_v2 || root.friends || /(?:^|\/)friends(?:_\d+)?\.json$/u.test(lower)) {
     arr(root.friends_v2 ?? root.friends ?? value).forEach((r, i) => add('friend', r, i, 'friends'));
   } else if (
     root.photos ||
     root.photos_v2 ||
     root.your_photos ||
+    root.other_photos_v2 ||
+    root.videos_v2 ||
     /(?:^|\/)(?:your_)?(?:uncategorized_)?photos(?:_\d+)?\.json$/u.test(lower)
   ) {
-    const photos = arr(root.photos ?? root.photos_v2 ?? root.your_photos ?? value);
+    const photos = arr(
+      root.photos ??
+        root.photos_v2 ??
+        root.your_photos ??
+        root.other_photos_v2 ??
+        root.videos_v2 ??
+        value,
+    );
     const album = str(root.name) || str(root.title);
     if (album)
       add(
@@ -163,13 +261,20 @@ export function parseFacebook(value: unknown, filename: string): NormalizedRecor
         filename,
         album,
       );
+    const albumRecord = album ? result[result.length - 1] : undefined;
+    const start = result.length;
     photos.forEach((r, i) => add('photo', r, i, album));
+    if (albumRecord)
+      albumRecord.metadata.photoSourceKeys = result.slice(start).map((r) => r.sourceKey);
   } else if (root.albums || root.albums_v2) {
     arr(root.albums ?? root.albums_v2).forEach((a, n) => {
       const album = obj(a);
       const name = str(album.name) || str(album.title);
       add('album', a, n, filename, name);
+      const albumRecord = result[result.length - 1],
+        start = result.length;
       arr(album.photos).forEach((p, i) => add('photo', p, i, `${filename}:${n}`, name));
+      albumRecord.metadata.photoSourceKeys = result.slice(start).map((r) => r.sourceKey);
     });
   } else if (
     root.posts ||
@@ -182,6 +287,30 @@ export function parseFacebook(value: unknown, filename: string): NormalizedRecor
     );
   }
   return result;
+}
+
+export async function facebookProvenance(
+  metadata: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!Array.isArray(metadata.photoSourceKeys)) return metadata;
+  const { photoSourceKeys, ...rest } = metadata;
+  return {
+    ...rest,
+    photoRecordIds: await Promise.all(photoSourceKeys.map((key) => hash(String(key)))),
+  };
+}
+/** Remote references are evidence only, never network requests. Traversal still fails closed. */
+export function attachmentPath(raw: string, warning: (message: string) => void): string | null {
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(raw)) {
+    warning(`External attachment omitted: ${raw}`);
+    return null;
+  }
+  const path = safePath(raw);
+  if (!mediaMime(path)) {
+    warning(`Unsupported attachment omitted: ${path}`);
+    return null;
+  }
+  return path;
 }
 
 export function safePath(path: string): string {
@@ -343,9 +472,8 @@ export async function importArchives(
     check();
     options.onProgress?.(++done, blobs.size);
     if (!/\.json$/iu.test(path)) continue;
-    const value = parseJson(
-      new TextDecoder('utf-8', { fatal: true }).decode(await blob.arrayBuffer()),
-    );
+    const rawJson = new TextDecoder('utf-8', { fatal: true }).decode(await blob.arrayBuffer());
+    const value = parseJson(rawJson);
     const root = obj(value);
     if (root.format === 'clean-bookface-private-archive/1') {
       if (!Array.isArray(root.records)) throw new Error('Invalid portable archive');
@@ -408,15 +536,15 @@ export async function importArchives(
       }
     } else {
       if (Object.hasOwn(root, 'format')) throw new Error('Unsupported declared archive format');
-      const parsed = parseFacebook(value, path);
+      const parsed = parseFacebook(value, path, rawJson);
       if (!parsed.length) warnings.push(`Unsupported or empty JSON: ${path}`);
       for (const item of parsed) {
         check();
         const attachments: MemoryRecord['attachments'] = [];
         for (const rawPath of item.mediaPaths) {
-          const mediaPath = safePath(rawPath);
+          const mediaPath = attachmentPath(rawPath, (message) => warnings.push(message));
+          if (!mediaPath) continue;
           const bytes = blobs.get(mediaPath);
-          if (!mediaMime(mediaPath)) throw new Error('Unsupported media type');
           if (!bytes) {
             missing.add(mediaPath);
             continue;
@@ -435,7 +563,7 @@ export async function importArchives(
           sourcePath: path,
           attachments,
           privateOnly: item.kind === 'message' || item.kind === 'friend',
-          provenance: item.metadata,
+          provenance: await facebookProvenance(item.metadata),
         });
         if (records.length > limits.maxRecords) throw new Error('Archive record limit exceeded');
       }
@@ -452,6 +580,7 @@ export async function exportArchives(records: MemoryRecord[]): Promise<Blob> {
   if (records.length > ARCHIVE_LIMITS.maxRecords) throw new Error('Archive record limit exceeded');
   const writer = new ZipWriter(new BlobWriter('application/zip'), { useWebWorkers: false });
   const rows = [];
+  const storedMedia = new Map<string, string>();
   let expanded = 0;
   let count = 1;
   try {
@@ -462,20 +591,25 @@ export async function exportArchives(records: MemoryRecord[]): Promise<Blob> {
         if (!mediaMime(attachment.path) || attachment.mimeType !== mediaMime(attachment.path))
           throw new Error('Unsupported media type');
         await rejectExecutable(attachment.bytes);
-        expanded += attachment.bytes.size;
+        const sha256 = await hash(attachment.bytes);
+        const previousPath = storedMedia.get(sha256);
+        if (!previousPath) expanded += attachment.bytes.size;
         if (
-          ++count > ARCHIVE_LIMITS.maxEntries ||
+          (!previousPath && ++count > ARCHIVE_LIMITS.maxEntries) ||
           attachment.bytes.size > ARCHIVE_LIMITS.maxEntryBytes ||
           expanded > ARCHIVE_LIMITS.maxExpandedBytes
         )
           throw new Error('Archive expansion limit exceeded');
-        const storagePath = `media/${count}.${attachment.path.split('.').pop()}`;
-        await writer.add(storagePath, new BlobReader(attachment.bytes), { level: 0 });
+        const storagePath = previousPath ?? `media/${count}.${attachment.path.split('.').pop()}`;
+        if (!previousPath) {
+          await writer.add(storagePath, new BlobReader(attachment.bytes), { level: 0 });
+          storedMedia.set(sha256, storagePath);
+        }
         attachments.push({
           path: attachment.path,
           mimeType: attachment.mimeType,
           storagePath,
-          sha256: await hash(attachment.bytes),
+          sha256,
         });
       }
       rows.push({ ...record, attachments });

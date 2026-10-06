@@ -1,6 +1,6 @@
 {
   "name": "clean-bookface-encrypted-client",
-  "version": "0.2.0-preview.1",
+  "version": "0.2.0-preview.2",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "node ../scripts/client-notices.mjs --check && tsc --noEmit && vite build",
+    "build": "node ../scripts/client-notices.mjs --check && tsc --noEmit && vite build && node ../scripts/client-manifest.mjs",
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "preview": "vite preview --host 127.0.0.1",

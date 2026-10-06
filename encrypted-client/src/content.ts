@@ -1,5 +1,15 @@
+import { prepareSharedPhoto, SHARED_PHOTO_LIMITS, validatePhotoHeader } from './shared-photo.js';
 import { isBlocked } from './lifecycle';
-import { type MatrixClient, type MatrixEvent, type Room, Preset, ClientEvent } from 'matrix-js-sdk';
+import {
+  type MatrixClient,
+  type MatrixEvent,
+  type Room,
+  Preset,
+  ClientEvent,
+  EventStatus,
+  EventTimeline,
+  Method,
+} from 'matrix-js-sdk';
 import { AllDevicesIsolationMode } from 'matrix-js-sdk/lib/crypto-api/index.js';
 import { Attachment, EncryptedAttachment, initAsync } from '@matrix-org/matrix-sdk-crypto-wasm';
 import { enforceRecipientBoundary } from './recipient-boundary.js';
@@ -27,6 +37,11 @@ export interface ArchiveOverflow {
   hasMore: true;
   reason: 'records' | 'bytes' | 'history';
 }
+export interface UnavailableContent {
+  roomId: string;
+  eventId?: string;
+  reason: 'missing-key' | 'integrity' | 'room' | 'limit';
+}
 export interface ArchiveBatch {
   roomId: string;
   eventId: string;
@@ -44,7 +59,21 @@ export interface ArchiveSearchHit {
   title: string;
   excerpt: string;
 }
+export interface ShareOutcome {
+  userId: string;
+  status: 'sent' | 'failed';
+  error?: string;
+}
+export interface ShareResult {
+  operationId: string;
+  outcomes: ShareOutcome[];
+}
 export interface SharedPost {
+  media?: Array<{ path: string; mimeType: string; size: number }>;
+  mediaLoaded: boolean;
+  readOnly: boolean;
+  sharedAt: number;
+  originalTimestamp: number | null;
   eventId: string;
   comments: SocialState['comments'];
   reactions: SocialState['reactions'];
@@ -57,6 +86,53 @@ export interface SharedPost {
 declare module 'matrix-js-sdk/lib/@types/event.js' {
   interface TimelineEvents {
     'org.cleanbookface.content.v1': SignedContent;
+  }
+}
+export class ArchiveHistoryUnavailable extends Error {
+  readonly code = 'ARCHIVE_HISTORY_UNAVAILABLE';
+  constructor(cause: unknown) {
+    super(
+      'Earlier saved archive history could not be verified. Synchronize or use your recovery kit, and download available saved parts before trying another import. Choosing the same files alone will not resolve this.',
+      { cause },
+    );
+    this.name = 'ArchiveHistoryUnavailable';
+  }
+}
+// Only locally recognized integrity/decryption failures need recovery guidance.
+// Transport errors and scan budgets keep their original retry/limit semantics.
+const historicalIntegrityErrors = new Set([
+  'Encrypted history is unavailable',
+  'Content could not be decrypted',
+  'Plaintext content refused',
+  'Missing or mismatched content context',
+  'Untrusted encrypted sender',
+  'Content signature is invalid',
+  'Content requires a verified master signature',
+  'Signed content context mismatch',
+  'Invalid signed content',
+  'Invalid signature encoding',
+  'Invalid signature length',
+  'Signing identity must be verified and unchanged',
+  'Unknown signing identity',
+  'Signing identity changed during verification',
+  'Invalid verified master identity',
+  'Invalid verified master key',
+  'Unexpected private archive content.',
+  'Invalid content object',
+  'Unexpected content fields',
+  'Invalid encrypted content',
+  'Invalid encrypted chunk manifest',
+  'Encrypted chunk order mismatch',
+  'Duplicate encrypted chunk or key',
+  'Encrypted chunk aggregate size mismatch',
+  'Invalid encrypted attachment',
+  'Invalid attachment encryption information',
+  'Social content in private archive',
+  'Unexpected content sender',
+]);
+class PhotoPresentationLimit extends Error {
+  constructor() {
+    super('Older shared photos exceed the presentation photo/pixel budget');
   }
 }
 class HistoryScanLimit extends Error {
@@ -74,17 +150,50 @@ export const CONTENT_LIMITS = Object.freeze({
   chunkBytes: 8 * 1024 * 1024,
   visibleBytes: MAX,
   archiveRoomsPerPage: 16,
+  feedPageSize: 20,
+  feedPageBytes: 32 * 1024 * 1024,
+  sharedPhotos: 4,
+  legacySharedPhotos: 32,
+  legacyDecodedPixels: 40_000_000,
+  searchIndexBytes: 8 * 1024 * 1024,
 });
 type FileDescriptor = { url: string; info: string; size: number };
 type ChunkDescriptor = FileDescriptor & { index: number };
-type PayloadBase = { version: 2; purpose: 'archive' | 'post'; id: string };
-type Payload = PayloadBase &
+type SearchRow = Pick<MemoryRecord, 'id' | 'title' | 'text'>;
+type SearchIndex = {
+  version: 1;
+  archiveId: string;
+  count: number;
+  sha256: string;
+  file: FileDescriptor;
+};
+type PayloadBase = {
+  version: 2;
+  purpose: 'archive' | 'post';
+  id: string;
+  searchIndex?: SearchIndex;
+};
+type StoredPayload = PayloadBase &
   ({ file: FileDescriptor } | { chunks: ChunkDescriptor[]; size: number });
+type SharedFields = Pick<
+  MemoryRecord,
+  'id' | 'kind' | 'text' | 'title' | 'timestamp' | 'sourcePath' | 'privateOnly'
+>;
+type SharedPhoto = { path: string; mimeType: 'image/jpeg'; sha256: string; file: FileDescriptor };
+type LazyPostPayload = {
+  version: 3;
+  purpose: 'post';
+  id: string;
+  record: SharedFields;
+  photos: SharedPhoto[];
+};
+type Payload = StoredPayload | LazyPostPayload;
 type PendingUpload = {
   archive: Blob;
+  search?: { blob: Blob; hash: string; count: number; file?: FileDescriptor };
   chunkSize: number;
   files: FileDescriptor[];
-  running?: Promise<Payload>;
+  running?: Promise<StoredPayload>;
 };
 const object = (v: unknown): Record<string, unknown> => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('Invalid content object');
@@ -133,6 +242,53 @@ function descriptor(
 }
 function payload(value: unknown): Payload {
   const p = object(value);
+  if (p.version === 3) {
+    exact(p, ['version', 'purpose', 'id', 'record', 'photos']);
+    const r = object(p.record);
+    exact(r, ['id', 'kind', 'text', 'title', 'timestamp', 'sourcePath', 'privateOnly']);
+    if (
+      p.purpose !== 'post' ||
+      typeof p.id !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(p.id) ||
+      typeof r.id !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(r.id) ||
+      !['post', 'photo', 'album'].includes(String(r.kind)) ||
+      typeof r.text !== 'string' ||
+      r.text.length > 16000 ||
+      typeof r.title !== 'string' ||
+      r.title.length > 1024 ||
+      r.sourcePath !== '' ||
+      r.privateOnly !== false ||
+      (r.timestamp !== null &&
+        (!Number.isSafeInteger(r.timestamp) ||
+          Number(r.timestamp) < -62135596800000 ||
+          Number(r.timestamp) > 253402300799999)) ||
+      !Array.isArray(p.photos) ||
+      p.photos.length > CONTENT_LIMITS.sharedPhotos
+    )
+      throw new Error('Invalid lazy shared copy');
+    const urls = new Set<string>(),
+      keys = new Set<string>();
+    p.photos.forEach((value, index) => {
+      const photo = object(value);
+      exact(photo, ['path', 'mimeType', 'sha256', 'file']);
+      if (
+        photo.path !== `photo-${index + 1}.jpg` ||
+        photo.mimeType !== 'image/jpeg' ||
+        typeof photo.sha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/u.test(photo.sha256)
+      )
+        throw new Error('Invalid shared photo descriptor');
+      const parsed = descriptor(photo.file, SHARED_PHOTO_LIMITS.outputBytes);
+      if (urls.has(parsed.file.url) || keys.has(parsed.key))
+        throw new Error('Duplicate shared photo or key');
+      urls.add(parsed.file.url);
+      keys.add(parsed.key);
+    });
+    if (JSON.stringify(p).length > 24000)
+      throw new Error('Shared post exceeds signed-envelope budget');
+    return p as unknown as LazyPostPayload;
+  }
   if (
     p.version !== 2 ||
     !['archive', 'post'].includes(String(p.purpose)) ||
@@ -140,11 +296,28 @@ function payload(value: unknown): Payload {
     !/^[a-f0-9]{64}$/u.test(p.id)
   )
     throw new Error('Invalid encrypted content');
+  const optional = Object.hasOwn(p, 'searchIndex') ? ['searchIndex'] : [];
+  if (optional.length) {
+    const index = object(p.searchIndex);
+    exact(index, ['version', 'archiveId', 'count', 'sha256', 'file']);
+    if (
+      p.purpose !== 'archive' ||
+      index.version !== 1 ||
+      index.archiveId !== p.id ||
+      !Number.isSafeInteger(index.count) ||
+      (index.count as number) < 1 ||
+      (index.count as number) > 100000 ||
+      typeof index.sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(index.sha256)
+    )
+      throw new Error('Invalid archive search index');
+    descriptor(index.file, CONTENT_LIMITS.searchIndexBytes);
+  }
   if (Object.hasOwn(p, 'file')) {
-    exact(p, ['version', 'purpose', 'id', 'file']);
+    exact(p, ['version', 'purpose', 'id', 'file', ...optional]);
     descriptor(p.file, MAX);
   } else {
-    exact(p, ['version', 'purpose', 'id', 'chunks', 'size']);
+    exact(p, ['version', 'purpose', 'id', 'chunks', 'size', ...optional]);
     if (
       !Array.isArray(p.chunks) ||
       p.chunks.length < 2 ||
@@ -215,59 +388,14 @@ async function sharedCopy(record: MemoryRecord): Promise<MemoryRecord> {
     typeof record.title !== 'string'
   )
     throw new Error('Invalid shared record');
+  if (record.attachments.length > CONTENT_LIMITS.sharedPhotos)
+    throw new Error('Share at most four photos');
+  if (record.text.length > 16000 || record.title.length > 1024)
+    throw new Error('Shared text exceeds limit');
   const attachments: MemoryRecord['attachments'] = [];
-  for (const a of record.attachments) {
-    if (
-      !['image/jpeg', 'image/png', 'image/webp'].includes(a.mimeType) ||
-      a.bytes.size > ARCHIVE_LIMITS.maxEntryBytes
-    )
-      throw new Error('Sharing supports JPEG, PNG and WebP photos only');
-    if (typeof createImageBitmap !== 'function' || typeof document === 'undefined')
-      throw new Error('Photo sharing requires browser image preparation');
-    const header = new Uint8Array(await a.bytes.slice(0, 32).arrayBuffer());
-    const png =
-      header.length >= 24 && [137, 80, 78, 71, 13, 10, 26, 10].every((v, i) => header[i] === v);
-    const jpeg = header[0] === 255 && header[1] === 216 && header[2] === 255;
-    const webp =
-      new TextDecoder().decode(header.slice(0, 4)) === 'RIFF' &&
-      new TextDecoder().decode(header.slice(8, 12)) === 'WEBP';
-    if (!(
-      (a.mimeType === 'image/png' && png) ||
-      (a.mimeType === 'image/jpeg' && jpeg) ||
-      (a.mimeType === 'image/webp' && webp)
-    ))
-      throw new Error('Photo bytes do not match a supported image');
-    if (png) {
-      const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
-      if (view.getUint32(16) * view.getUint32(20) > 40_000_000)
-        throw new Error('Photo dimensions exceed sharing limit');
-    }
-    const image = await createImageBitmap(a.bytes);
-    try {
-      if (!image.width || !image.height || image.width * image.height > 40_000_000)
-        throw new Error('Photo dimensions exceed sharing limit');
-      const canvas = document.createElement('canvas');
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const context = canvas.getContext('2d');
-      if (!context) throw new Error('Photo preparation unavailable');
-      context.drawImage(image, 0, 0);
-      const bytes = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error('Photo preparation failed'))),
-          'image/png',
-        ),
-      );
-      if (bytes.size > ARCHIVE_LIMITS.maxEntryBytes)
-        throw new Error('Prepared photo exceeds sharing limit');
-      attachments.push({
-        path: `photo-${attachments.length + 1}.png`,
-        mimeType: 'image/png',
-        bytes,
-      });
-    } finally {
-      image.close();
-    }
+  for (const attachment of record.attachments) {
+    const prepared = await prepareSharedPhoto(attachment);
+    attachments.push({ path: `photo-${attachments.length + 1}.jpg`, ...prepared });
   }
   const copy: MemoryRecord = {
     id: 'shared',
@@ -288,6 +416,22 @@ export class ContentStore {
   private verifiedPayloads = new WeakMap<MatrixEvent, Payload>();
   private revoked = new Set<string>();
   private conflicts: ArchiveConflict[] = [];
+  private unavailable = new Map<string, UnavailableContent>();
+  unavailableContent(): UnavailableContent[] {
+    return [...this.unavailable.values()].map((part) => ({ ...part }));
+  }
+  private quarantine(
+    roomId: string,
+    event: MatrixEvent | undefined,
+    reason: UnavailableContent['reason'],
+  ): void {
+    const eventId = event?.getId();
+    this.unavailable.set(`${roomId}\0${eventId ?? 'room'}`, {
+      roomId,
+      ...(eventId ? { eventId } : {}),
+      reason,
+    });
+  }
   private overflow: ArchiveOverflow | null = null;
   archiveOverflow(): ArchiveOverflow | null {
     return this.overflow ? { ...this.overflow } : null;
@@ -298,7 +442,13 @@ export class ContentStore {
       versionIds: [...conflict.versionIds],
     }));
   }
+  private appendIndexes = new Map<
+    string,
+    { length: number; fingerprint: string; ids: Set<string>; anchor?: MatrixEvent }
+  >();
   private preparedSessions = new WeakSet<Room>();
+  private recoveredHistoryTokens = new WeakSet<Room>();
+  private legacyPostPixels = new WeakMap<SharedPost, number>();
   private locked: { roomId: string; userId: string; reason: string }[] = [];
   private downloads = new Map<string, { records: MemoryRecord[]; bytes: number }>();
   private cachedBytes = 0;
@@ -306,7 +456,39 @@ export class ContentStore {
     return this.locked.map((r) => ({ ...r }));
   }
   private creatingArchive?: Promise<string>;
-  private uploads = new Map<string, Payload>();
+  private uploads = new Map<string, StoredPayload>();
+  private sharedUploads = new Map<string, LazyPostPayload>();
+  private feedGeneration = 0;
+  private feedSnapshot?: {
+    roomId?: string;
+    id: string;
+    created: number;
+    limited: boolean;
+    entries: Array<{
+      event: MatrixEvent;
+      events: MatrixEvent[];
+      peer: string;
+      readOnly: boolean;
+      id: string;
+    }>;
+  };
+  private conversationExports = new Map<
+    string,
+    {
+      id: string;
+      created: number;
+      units: Array<{
+        event: MatrixEvent;
+        state: SocialState;
+        comment?: SocialState['comments'][number];
+      }>;
+      peer: string;
+    }
+  >();
+  private lazyPosts = new Map<
+    string,
+    { payload: LazyPostPayload; event: MatrixEvent; peer: string }
+  >();
   private pendingUploads = new Map<string, PendingUpload>();
   constructor(
     private client: MatrixClient,
@@ -403,7 +585,11 @@ export class ContentStore {
     return r.currentState.getStateEvents(ROOM, '')?.getContent().purpose;
   }
   private check(r: Room, peer?: string, allowRevoked = false): void {
-    this.crypto();
+    const crypto = this.crypto() as ReturnType<ContentStore['crypto']> & {
+      roomEncryptors?: Record<string, { room?: Room }>;
+    };
+    const encryptorRoom = crypto.roomEncryptors?.[r.roomId]?.room;
+    if (encryptorRoom && encryptorRoom !== r) throw new Error('SDK room identity mismatch');
     if (peer && isBlocked(this.client, peer)) throw new Error('Friend is blocked');
     if (
       r.currentState.getStateEvents('m.room.encryption', '')?.getContent().algorithm !== ALGORITHM
@@ -447,6 +633,50 @@ export class ContentStore {
     await this.prepareSession(r);
     this.check(r, peer);
     return r;
+  }
+  /** Historical reads do not authorize a send, rotate a session or un-revoke a peer. */
+  private async readGuard(id: string, peer: string): Promise<Room> {
+    const room = this.room(id);
+    await room.loadMembersIfNeeded();
+    await this.requireVerifiedUser(this.own());
+    if (
+      this.purpose(room) !== 'pair' ||
+      room.currentState.getStateEvents('m.room.encryption', '')?.getContent().algorithm !==
+        ALGORITHM ||
+      room.currentState.getStateEvents('m.room.history_visibility', '')?.getContent()
+        .history_visibility !== 'joined' ||
+      !['join', 'leave', 'ban'].includes(room.getMyMembership()) ||
+      !(await this.crypto().isEncryptionEnabledInRoom(id))
+    )
+      throw new Error('Historical room policy could not be verified');
+    const members = room.getMembers();
+    if (
+      members.length !== 2 ||
+      !members.some((m) => m.userId === this.own()) ||
+      !members.some((m) => m.userId === peer) ||
+      members.some((m) => ![this.own(), peer].includes(m.userId))
+    )
+      throw new Error('Unexpected historical room membership');
+    return room;
+  }
+  conversationRooms(): Array<{ roomId: string; userId: string; readOnly: boolean }> {
+    const active = new Set(this.friendRooms().map((r) => r.roomId));
+    return this.client
+      .getRooms()
+      .filter(
+        (room) =>
+          this.purpose(room) === 'pair' &&
+          ['join', 'leave', 'ban'].includes(room.getMyMembership()),
+      )
+      .flatMap((room) => {
+        const members = room.getMembers(),
+          peers = members.filter((m) => m.userId !== this.own());
+        if (peers.length !== 1 || !members.some((m) => m.userId === this.own())) return [];
+        return [
+          { roomId: room.roomId, userId: peers[0].userId, readOnly: !active.has(room.roomId) },
+        ];
+      })
+      .sort((a, b) => a.roomId.localeCompare(b.roomId));
   }
   private async prepareSession(room: Room): Promise<void> {
     if (this.preparedSessions.has(room)) return;
@@ -594,7 +824,11 @@ export class ContentStore {
     );
   }
   /** Paged authenticated manifests only; downloading a batch separately validates every byte. */
-  async archiveBatches(cursor?: string, limit = 50): Promise<ArchiveBatchPage> {
+  async archiveBatches(
+    cursor?: string,
+    limit = 50,
+    allowPartial = false,
+  ): Promise<ArchiveBatchPage> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
       throw new Error('Archive batch page size must be 1–100');
     const rooms = this.archiveRooms();
@@ -628,11 +862,16 @@ export class ContentStore {
           roomId,
           undefined,
           index === start ? after : undefined,
+          allowPartial,
         )) {
           const eventId = event.getId();
           if (!eventId) throw new Error('Archive batch has no event identity');
           const p = this.verifiedPayloads.get(event)!;
-          if (p.purpose !== 'archive') throw new Error('Unexpected archive payload');
+          if (p.purpose !== 'archive') {
+            if (!allowPartial) throw new Error('Unexpected archive payload');
+            this.quarantine(roomId, event, 'integrity');
+            continue;
+          }
           if (batches.length >= limit)
             return { batches, nextCursor: encodeURIComponent(JSON.stringify(last)) };
           batches.push({ roomId, eventId, id: p.id, bytes: 'file' in p ? p.file.size : p.size });
@@ -653,10 +892,14 @@ export class ContentStore {
     return exportArchives(await this.readArchiveBatch(roomId, eventId));
   }
   async readArchiveBatch(roomId: string, eventId: string): Promise<MemoryRecord[]> {
+    return this.download(await this.archivePayload(roomId, eventId));
+  }
+  private async archivePayload(roomId: string, eventId: string): Promise<StoredPayload> {
     if (!this.archiveRooms().some((room) => room.roomId === roomId))
       throw new Error('Archive room is not available');
+    await this.guard(roomId);
     let event: MatrixEvent | undefined;
-    for await (const candidate of this.scanEvents(roomId)) {
+    for await (const candidate of this.scanEvents(roomId, undefined, undefined, true)) {
       if (candidate.getId() === eventId) {
         event = candidate;
         break;
@@ -665,7 +908,47 @@ export class ContentStore {
     if (!event) throw new Error('Archive batch is not available');
     const p = this.verifiedPayloads.get(event)!;
     if (p.purpose !== 'archive') throw new Error('Unexpected archive payload');
-    return this.download(p);
+    return p;
+  }
+  private async searchRows(p: StoredPayload): Promise<SearchRow[]> {
+    if (!p.searchIndex) return this.download(p);
+    try {
+      const bytes = await this.downloadPart(p.searchIndex.file);
+      try {
+        if ((await sha(new Blob([bytes]))) !== p.searchIndex.sha256)
+          throw new Error('Search index hash mismatch');
+        const index = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+        exact(index, ['version', 'archiveId', 'records']);
+        if (
+          index.version !== 1 ||
+          index.archiveId !== p.id ||
+          !Array.isArray(index.records) ||
+          index.records.length !== p.searchIndex.count
+        )
+          throw new Error('Search index binding mismatch');
+        const ids = new Set<string>();
+        return index.records.map((value: unknown) => {
+          const row = object(value);
+          exact(row, ['id', 'title', 'text']);
+          if (
+            typeof row.id !== 'string' ||
+            !row.id ||
+            row.id.length > 200 ||
+            ids.has(row.id) ||
+            typeof row.title !== 'string' ||
+            typeof row.text !== 'string'
+          )
+            throw new Error('Invalid search index record');
+          ids.add(row.id);
+          return row as SearchRow;
+        });
+      } finally {
+        bytes.fill(0);
+      }
+    } catch {
+      // An unavailable optional accelerator never hides authoritative archive records.
+      return this.download(p);
+    }
   }
   /** Search one authenticated saved part at a time; retain small excerpts, never all media. */
   async searchArchive(
@@ -686,15 +969,30 @@ export class ContentStore {
     const matches: ArchiveSearchHit[] = [];
     const seen = new Set<string>();
     let cursor: string | undefined,
-      partsChecked = 0;
+      partsChecked = 0,
+      incomplete = false;
     do {
       signal?.throwIfAborted();
-      const page = await this.archiveBatches(cursor);
+      const page = await this.archiveBatches(cursor, 50, true);
       for (const batch of page.batches) {
         if (seen.has(batch.id)) continue;
         seen.add(batch.id);
         signal?.throwIfAborted();
-        const rows = await this.readArchiveBatch(batch.roomId, batch.eventId);
+        let rows: SearchRow[];
+        try {
+          rows = await this.searchRows(await this.archivePayload(batch.roomId, batch.eventId));
+        } catch {
+          signal?.throwIfAborted();
+          incomplete = true;
+          this.unavailable.set(`${batch.roomId}\0${batch.eventId}`, {
+            roomId: batch.roomId,
+            eventId: batch.eventId,
+            reason: 'integrity',
+          });
+          partsChecked++;
+          onProgress?.(partsChecked);
+          continue;
+        }
         for (const row of rows) {
           const value = `${row.title}\n${row.text}`,
             at = value.toLocaleLowerCase().indexOf(term);
@@ -715,9 +1013,20 @@ export class ContentStore {
         throw new Error('Archive search made no progress. Refresh and retry.');
       cursor = page.nextCursor;
     } while (cursor);
-    return { matches, partsChecked, limited: false };
+    return {
+      matches,
+      partsChecked,
+      limited:
+        incomplete ||
+        [...this.unavailable.values()].some((item) =>
+          this.archiveRooms().some((room) => room.roomId === item.roomId),
+        ),
+    };
   }
-  private async upload(records: MemoryRecord[], purpose: Payload['purpose']): Promise<Payload> {
+  private async upload(
+    records: MemoryRecord[],
+    purpose: StoredPayload['purpose'],
+  ): Promise<StoredPayload> {
     const id = await identity(records),
       cacheKey = `${purpose}:${id}`;
     const cached = this.uploads.get(cacheKey);
@@ -758,7 +1067,11 @@ export class ContentStore {
       if (!pending) {
         // Bound retained plaintext retry material to one aggregate archive budget.
         while (
-          [...this.pendingUploads.values()].reduce((n, p) => n + p.archive.size, 0) + archive.size >
+          [...this.pendingUploads.values()].reduce(
+            (n, p) => n + p.archive.size + (p.search?.blob.size ?? 0),
+            0,
+          ) +
+            archive.size >
           MAX
         ) {
           const evict = [...this.pendingUploads].find(([, p]) => !p.running);
@@ -766,7 +1079,36 @@ export class ContentStore {
             throw new Error('Finish the current encrypted upload before starting another');
           this.pendingUploads.delete(evict[0]);
         }
-        pending = { archive, chunkSize, files: [] };
+        let search: PendingUpload['search'];
+        if (
+          purpose === 'archive' &&
+          records.length &&
+          records.length <= 100000 &&
+          records.reduce((n, r) => n + r.id.length + r.title.length + r.text.length + 64, 0) <=
+            CONTENT_LIMITS.searchIndexBytes
+        ) {
+          const blob = new Blob([
+            JSON.stringify({
+              version: 1,
+              archiveId: id,
+              records: records.map(({ id, title, text }) => ({ id, title, text })),
+            }),
+          ]);
+          const retained = [...this.pendingUploads.values()].reduce(
+            (n, p) => n + p.archive.size + (p.search?.blob.size ?? 0),
+            0,
+          );
+          if (
+            blob.size <=
+              Math.min(
+                CONTENT_LIMITS.searchIndexBytes,
+                configured ?? CONTENT_LIMITS.searchIndexBytes,
+              ) &&
+            retained + archive.size + blob.size <= MAX
+          )
+            search = { blob, hash: await sha(blob), count: records.length };
+        }
+        pending = { archive, chunkSize, files: [], search };
         this.pendingUploads.set(cacheKey, pending);
       }
     }
@@ -797,17 +1139,51 @@ export class ContentStore {
           encrypted.free();
         }
       }
+      if (current.search && !current.search.file) {
+        const plain = new Uint8Array(await current.search.blob.arrayBuffer());
+        const encrypted = Attachment.encrypt(plain);
+        plain.fill(0);
+        try {
+          const bytes = new Uint8Array(encrypted.encryptedData);
+          const result = await this.client.uploadContent(
+            new Blob([bytes], { type: 'application/octet-stream' }),
+            { type: 'application/octet-stream', includeFilename: false },
+          );
+          const file = {
+            url: result.content_uri,
+            info: encrypted.mediaEncryptionInfo!,
+            size: bytes.length,
+          };
+          descriptor(file, CONTENT_LIMITS.searchIndexBytes);
+          current.search.file = file;
+        } finally {
+          encrypted.free();
+        }
+      }
+      const optional = current.search
+        ? {
+            searchIndex: {
+              version: 1,
+              archiveId: id,
+              count: current.search.count,
+              sha256: current.search.hash,
+              file: current.search.file,
+            },
+          }
+        : {};
       const p = payload(
         count === 1
-          ? { version: 2, purpose, id, file: current.files[0] }
+          ? { version: 2, purpose, id, file: current.files[0], ...optional }
           : {
               version: 2,
               purpose,
               id,
+              ...optional,
               size: current.archive.size,
               chunks: current.files.map((file, index) => ({ ...file, index })),
             },
       );
+      if (p.version !== 2) throw new Error('Unexpected upload format');
       this.uploads.set(cacheKey, p);
       this.pendingUploads.delete(cacheKey);
       return p;
@@ -826,8 +1202,36 @@ export class ContentStore {
       id,
       p as unknown as Record<string, unknown>,
     );
-    await this.guard(id, peer); // Final awaited operation before SDK send; no plaintext fallback.
-    await this.client.sendEvent(id, EVENT, signed, txn);
+    await this.sendSigned(id, signed, txn, peer);
+  }
+  /** A failed SDK local echo owns its transaction until the remote echo arrives.
+   * Reuse that exact encrypted event; creating another echo with the same transaction
+   * fails locally, and assigning a new transaction could duplicate an unknown outcome. */
+  private async sendSigned(
+    id: string,
+    signed: SignedContent,
+    txn: string,
+    peer?: string,
+  ): Promise<void> {
+    await this.guard(id, peer); // Last await before either SDK send path; rechecks identity/audience.
+    const room = this.client.getRoom(id);
+    if (!room) throw new Error('Encrypted room is unavailable');
+    const pending = room.getEventForTxnId?.(txn);
+    if (!pending) {
+      await this.client.sendEvent(id, EVENT, signed, txn);
+      return;
+    }
+    if (
+      pending.getRoomId() !== id ||
+      pending.getSender() !== this.own() ||
+      pending.getType() !== EVENT ||
+      canonical(pending.getContent()) !== canonical(signed)
+    )
+      throw new Error('Pending transaction does not match this signed operation');
+    if (pending.status === EventStatus.SENT) return; // Server acknowledgement already received.
+    if (pending.status !== EventStatus.NOT_SENT)
+      throw new Error('This encrypted operation is still sending. Retry after it finishes.');
+    await this.client.resendEvent(pending, room);
   }
   async saveArchive(records: MemoryRecord[]): Promise<void> {
     const id = (await this.archiveRoom(true))!;
@@ -880,29 +1284,183 @@ export class ContentStore {
       throw new Error('Choose a nonempty, bounded archive part.');
     const batchId = await identity(records);
     const roomId = (await this.archiveRoom(true))!;
-    for (const room of this.archiveRooms()) {
-      for (const event of await this.events(room.roomId)) {
-        const existing = this.verifiedPayloads.get(event);
-        if (!existing || existing.purpose !== 'archive')
-          throw new Error('Unexpected private archive content.');
-        if (existing.id === batchId) return { id: batchId, stored: false };
+    for (const candidate of this.archiveRooms()) {
+      const room = await this.guard(candidate.roomId),
+        timeline = room.getLiveTimeline().getEvents();
+      try {
+        const fingerprint = async (length: number) => {
+          if (length > 50000) throw new HistoryScanLimit();
+          const hashes: string[] = [];
+          let bytes = 0;
+          for (const event of timeline.slice(0, length)) {
+            const value = canonical({
+              id: event.getId(),
+              sender: event.getSender(),
+              encrypted: event.isEncrypted(),
+              failed: event.isDecryptionFailure(),
+              content: event.getContent(),
+            });
+            bytes += value.length * 2;
+            if (value.length > 65536 || bytes > 64 * 1024 * 1024) throw new HistoryScanLimit();
+            hashes.push(await sha(value));
+          }
+          return sha(hashes.join(''));
+        };
+        let index = this.appendIndexes.get(room.roomId);
+        if (
+          index &&
+          (room.oldState.paginationToken ||
+            timeline.length < index.length ||
+            (await fingerprint(index.length)) !== index.fingerprint)
+        )
+          index = undefined;
+        if (index?.anchor) await this.trusted(index.anchor, room.roomId); // Recheck current signing identity, device trust and unchanged anchor.
+        const ids = new Set(index?.ids),
+          after = index?.anchor?.getId();
+        let anchor = index?.anchor;
+        for await (const event of this.scanEvents(room.roomId, undefined, after)) {
+          const existing = this.verifiedPayloads.get(event);
+          if (!existing || existing.purpose !== 'archive')
+            throw new Error('Unexpected private archive content.');
+          ids.add(existing.id);
+          anchor = event;
+        }
+        const length = timeline.length;
+        this.appendIndexes.set(room.roomId, {
+          length,
+          fingerprint: await fingerprint(length),
+          ids,
+          anchor,
+        });
+        if (ids.has(batchId)) return { id: batchId, stored: false };
+      } catch (error) {
+        if (error instanceof Error && historicalIntegrityErrors.has(error.message))
+          throw new ArchiveHistoryUnavailable(error);
+        throw error;
       }
     }
     const p = await this.upload(records, 'archive');
     await this.send(roomId, p);
     return { id: p.id, stored: true };
   }
-  async share(record: MemoryRecord, recipientIds: string[]): Promise<void> {
+  private async sharedIdentity(p: Pick<LazyPostPayload, 'record' | 'photos'>): Promise<string> {
+    return sha(
+      canonical({
+        record: p.record,
+        photos: p.photos.map((photo) => ({
+          path: photo.path,
+          mimeType: photo.mimeType,
+          sha256: photo.sha256,
+          size: photo.file.size,
+        })),
+      }),
+    );
+  }
+  private async uploadShared(copy: MemoryRecord): Promise<LazyPostPayload> {
+    const { attachments, provenance: _provenance, conflictOf: _conflict, ...record } = copy;
+    const hashes = await Promise.all(attachments.map((a) => sha(a.bytes)));
+    const id = await this.sharedIdentity({
+      record,
+      photos: attachments.map((a, i) => ({
+        path: a.path,
+        mimeType: 'image/jpeg',
+        sha256: hashes[i],
+        file: { size: a.bytes.size, url: '', info: '' },
+      })),
+    });
+    const previous = this.sharedUploads.get(id);
+    if (previous) return previous;
+    const config = await this.client.getMediaConfig(true),
+      cap = config['m.upload.size'];
+    if (cap !== undefined && (!Number.isSafeInteger(cap) || Number(cap) < 1))
+      throw new Error('Invalid homeserver upload limit');
+    const photos: SharedPhoto[] = [];
+    await initAsync();
+    for (let i = 0; i < attachments.length; i++) {
+      const photo = attachments[i];
+      if (cap !== undefined && photo.bytes.size > Number(cap))
+        throw new Error('Prepared photo exceeds homeserver upload limit');
+      const plain = new Uint8Array(await photo.bytes.arrayBuffer()),
+        encrypted = Attachment.encrypt(plain);
+      plain.fill(0);
+      try {
+        const bytes = new Uint8Array(encrypted.encryptedData),
+          info = encrypted.mediaEncryptionInfo!;
+        const result = await this.client.uploadContent(
+          new Blob([bytes], { type: 'application/octet-stream' }),
+          { type: 'application/octet-stream', includeFilename: false },
+        );
+        photos.push({
+          path: photo.path,
+          mimeType: 'image/jpeg',
+          sha256: hashes[i],
+          file: { url: result.content_uri, info, size: bytes.length },
+        });
+      } finally {
+        encrypted.free();
+      }
+    }
+    const p = payload({ version: 3, purpose: 'post', id, record, photos });
+    if (p.version !== 3) throw new Error('Unexpected shared upload');
+    if (this.sharedUploads.size >= 256)
+      this.sharedUploads.delete(this.sharedUploads.keys().next().value!);
+    this.sharedUploads.set(id, p);
+    return p;
+  }
+  async share(
+    record: MemoryRecord,
+    recipientIds: string[],
+    operationId: string = crypto.randomUUID(),
+  ): Promise<ShareResult> {
     const recipients = [...new Set(recipientIds)];
     if (!recipients.length || recipients.length > 100) throw new Error('Choose 1–100 friends');
-    const rooms = recipients.map((peer) => {
-      const room = this.friendRooms().find((r) => r.userId === peer);
-      if (!room) throw new Error('Friendship required before sharing');
-      return room;
-    });
-    for (const r of rooms) await this.guard(r.roomId, r.userId);
-    const p = await this.upload([await sharedCopy(record)], 'post');
-    for (const r of rooms) await this.send(r.roomId, p, r.userId);
+    if (!/^[a-zA-Z0-9_-]{16,128}$/u.test(operationId))
+      throw new Error('Invalid share operation identity');
+    const outcomes: ShareOutcome[] = [],
+      rooms: Array<{ roomId: string; userId: string }> = [];
+    let firstError: unknown;
+    for (const userId of recipients) {
+      try {
+        const room = this.friendRooms().find((r) => r.userId === userId);
+        if (!room) throw new Error('Friendship required before sharing');
+        await this.guard(room.roomId, userId);
+        rooms.push(room);
+      } catch (error) {
+        firstError ??= error;
+        outcomes.push({
+          userId,
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Sharing failed',
+        });
+      }
+    }
+    if (rooms.length) {
+      const copy = await sharedCopy(record);
+      copy.id = await sha(`${copy.id}\0${operationId}`);
+      const p = await this.uploadShared(copy);
+      for (const room of rooms) {
+        try {
+          await this.send(room.roomId, p, room.userId);
+          outcomes.push({ userId: room.userId, status: 'sent' });
+        } catch (error) {
+          firstError ??= error;
+          outcomes.push({
+            userId: room.userId,
+            status: 'failed',
+            error: error instanceof Error ? error.message : 'Sharing failed',
+          });
+        }
+      }
+    }
+    if (!outcomes.some((outcome) => outcome.status === 'sent'))
+      throw Object.assign(
+        firstError instanceof Error ? firstError : new Error('No recipients received this share'),
+        { outcomes },
+      );
+    return {
+      operationId,
+      outcomes: recipients.map((id) => outcomes.find((outcome) => outcome.userId === id)!),
+    };
   }
   /** Retain operationId for retries. Each room is a separate conversation. */
   private async social(
@@ -930,6 +1488,17 @@ export class ContentStore {
       postSender: post.sender,
       ...action,
     });
+    if (
+      events.some((event) => {
+        const previous = this.verifiedSocial.get(event);
+        return (
+          event.getSender() === this.own() &&
+          previous?.id === operationId &&
+          canonical(previous) !== canonical(p)
+        );
+      })
+    )
+      throw new Error('Conflicting social operation identity');
     const history = events
       .filter((e) => this.verifiedSocial.has(e))
       .map((e) => ({
@@ -949,8 +1518,7 @@ export class ContentStore {
       p as unknown as Record<string, unknown>,
     );
     const txn = await sha(`${this.own()}\0${post.roomId}\0social\0${operationId}`);
-    await this.guard(post.roomId, peer);
-    await this.client.sendEvent(post.roomId, EVENT, signed, txn);
+    await this.sendSigned(post.roomId, signed, txn, peer);
   }
   async addComment(
     post: Pick<SharedPost, 'roomId' | 'id' | 'sender'>,
@@ -1007,7 +1575,12 @@ export class ContentStore {
       event.getContent(),
     );
     if (content.purpose === 'social') this.verifiedSocial.set(event, parseSocial(content));
-    else this.verifiedPayloads.set(event, payload(content));
+    else {
+      const p = payload(content);
+      if (p.version === 3 && (await this.sharedIdentity(p)) !== p.id)
+        throw new Error('Shared post identity mismatch');
+      this.verifiedPayloads.set(event, p);
+    }
   }
   private async downloadPart(file: FileDescriptor): Promise<Uint8Array<ArrayBuffer>> {
     const url = this.client.mxcUrlToHttp(
@@ -1070,7 +1643,7 @@ export class ContentStore {
     }
     return plain;
   }
-  private async download(p: Payload): Promise<MemoryRecord[]> {
+  private async download(p: StoredPayload): Promise<MemoryRecord[]> {
     const cacheKey = JSON.stringify(p),
       cached = this.downloads.get(cacheKey);
     if (cached) return structuredClone(cached.records);
@@ -1119,8 +1692,60 @@ export class ContentStore {
     id: string,
     peer?: string,
     after?: string,
+    allowPartial = false,
+    historical = false,
   ): AsyncGenerator<MatrixEvent> {
-    const room = await this.guard(id, peer);
+    let room: Room;
+    try {
+      room = historical && peer ? await this.readGuard(id, peer) : await this.guard(id, peer);
+    } catch (error) {
+      if (!allowPartial) throw error;
+      this.quarantine(id, undefined, 'room');
+      return;
+    }
+    // SDK 43's ordinary /sync leave-room branch omits timeline.prev_batch.
+    // Recover pagination only, never content or trust, using an existing event.
+    if (
+      historical &&
+      room.getMyMembership() !== 'join' &&
+      !room.oldState.paginationToken &&
+      !this.recoveredHistoryTokens.has(room)
+    ) {
+      const anchor = room.getLiveTimeline().getEvents()[0]?.getId();
+      if (!anchor)
+        throw new Error('Historical room has no pagination anchor; synchronize and try again');
+      const context = object(
+        await this.client.http.authedRequest(
+          Method.Get,
+          `/rooms/${encodeURIComponent(id)}/context/${encodeURIComponent(anchor)}`,
+          { limit: '0' },
+        ),
+      );
+      const event = object(context.event);
+      if (
+        event.event_id !== anchor ||
+        (event.room_id !== undefined && event.room_id !== id) ||
+        (context.start !== undefined &&
+          context.start !== null &&
+          (typeof context.start !== 'string' || !context.start || context.start.length > 4096))
+      )
+        throw new Error('Historical pagination context does not match this conversation');
+      // Another scan or sync may have advanced history while /context was pending.
+      // Never replace that newer pagination position with this stale response.
+      if (
+        !room.oldState.paginationToken &&
+        room.getLiveTimeline().getEvents()[0]?.getId() === anchor &&
+        !this.recoveredHistoryTokens.has(room)
+      ) {
+        room
+          .getLiveTimeline()
+          .setPaginationToken(
+            typeof context.start === 'string' ? context.start : null,
+            EventTimeline.BACKWARDS,
+          );
+        this.recoveredHistoryTokens.add(room);
+      }
+    }
     let pages = 0;
     let deadline = Date.now() + 30000;
     while (room.oldState.paginationToken) {
@@ -1130,21 +1755,31 @@ export class ContentStore {
       if (room.oldState.paginationToken === token)
         throw new Error('History pagination made no progress');
     }
-    let skipping = after !== undefined;
+    let skipping = after !== undefined,
+      inspected = 0;
     for (const event of room.getLiveTimeline().getEvents()) {
-      if (Date.now() > deadline) throw new HistoryScanLimit();
+      if (++inspected > 50000 || Date.now() > deadline) throw new HistoryScanLimit();
       if (skipping) {
         if (event.getId() === after) skipping = false;
         continue;
       }
-      if (event.isEncrypted()) await this.client.decryptEventIfNeeded(event);
-      if (event.isDecryptionFailure()) throw new Error('Encrypted history is unavailable');
-      if (event.getType() !== EVENT) continue;
-      if (![this.own(), peer].includes(event.getSender()))
-        throw new Error('Unexpected content sender');
-      await this.trusted(event, id);
-      if (!peer && this.verifiedSocial.has(event))
-        throw new Error('Social content in private archive');
+      try {
+        if (event.isEncrypted()) await this.client.decryptEventIfNeeded(event);
+        if (event.isDecryptionFailure()) throw new Error('Encrypted history is unavailable');
+        if (event.getType() !== EVENT) continue;
+        if (![this.own(), peer].includes(event.getSender()))
+          throw new Error('Unexpected content sender');
+        await this.trusted(event, id);
+        if (!peer && this.verifiedSocial.has(event))
+          throw new Error('Social content in private archive');
+      } catch (error) {
+        if (!allowPartial) throw error;
+        // Never display untrusted payload fields or reinterpret failed integrity as data.
+        this.verifiedPayloads.delete(event);
+        this.verifiedSocial.delete(event);
+        this.quarantine(id, event, event.isDecryptionFailure() ? 'missing-key' : 'integrity');
+        continue;
+      }
       const suspendedAt = Date.now();
       yield event;
       deadline += Date.now() - suspendedAt;
@@ -1171,6 +1806,14 @@ export class ContentStore {
   }
   /** Bounded union. Original authenticated batches always remain independently exportable. */
   async privateArchive(): Promise<MemoryRecord[]> {
+    return this.collectPrivateArchive(false);
+  }
+  /** Independently verified parts remain usable; failed parts are explicitly quarantined. */
+  async privateArchiveView(): Promise<MemoryRecord[]> {
+    this.unavailable.clear();
+    return this.collectPrivateArchive(true);
+  }
+  private async collectPrivateArchive(allowPartial: boolean): Promise<MemoryRecord[]> {
     this.conflicts = [];
     this.overflow = null;
     const rooms = this.archiveRooms(),
@@ -1198,16 +1841,35 @@ export class ContentStore {
           mark('history');
           break;
         }
-        for await (const event of this.scanEvents(rooms[roomIndex].roomId)) {
+        for await (const event of this.scanEvents(
+          rooms[roomIndex].roomId,
+          undefined,
+          undefined,
+          allowPartial,
+        )) {
           if (Date.now() > deadline) {
             mark('history');
             break scan;
           }
           const p = this.verifiedPayloads.get(event)!;
-          if (p.purpose !== 'archive') throw new Error('Unexpected archive payload');
-          if (batches.has(p.id)) continue;
+          let part: MemoryRecord[];
+          try {
+            if (p.purpose !== 'archive') throw new Error('Unexpected archive payload');
+            if (batches.has(p.id)) continue;
+            part = await this.download(p);
+            // Validate every preserved revision before making any record from this part visible.
+            for (const record of part) {
+              const version = await this.archiveVariant(record);
+              if (record.conflictOf && record.id !== version.derivedId)
+                throw new Error('Invalid preserved archive version identity');
+            }
+          } catch (error) {
+            if (!allowPartial) throw error;
+            this.quarantine(rooms[roomIndex].roomId, event, 'integrity');
+            continue;
+          }
           batches.add(p.id);
-          for (const record of await this.download(p)) {
+          for (const record of part) {
             const version = await this.archiveVariant(record);
             if (record.conflictOf && record.id !== version.derivedId)
               throw new Error('Invalid preserved archive version identity');
@@ -1287,85 +1949,573 @@ export class ContentStore {
       (a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0) || a.id.localeCompare(b.id),
     );
   }
-  async posts(): Promise<SharedPost[]> {
-    const result: SharedPost[] = [];
-    this.locked = [];
-    const rooms = this.client
-      .getRooms()
-      .filter((r) => this.purpose(r) === 'pair' && r.getMyMembership() === 'join')
-      .flatMap((r) => {
-        const peer = r
-          .getMembers()
-          .find((m) => m.userId !== this.own() && ['join', 'invite'].includes(m.membership ?? ''));
-        return peer && !this.revoked.has(peer.userId) && !isBlocked(this.client, peer.userId)
-          ? [{ roomId: r.roomId, userId: peer.userId }]
-          : [];
-      });
-    for (const room of rooms) {
-      try {
-        const roomPosts: SharedPost[] = [];
-        const roomSeen = new Set<string>();
-        const events = await this.events(room.roomId, room.userId);
-        const social: SocialEvent[] = events
-          .filter((e) => this.verifiedSocial.has(e))
-          .map((e) => ({
-            payload: this.verifiedSocial.get(e)!,
-            sender: e.getSender()!,
-            timestamp: e.getTs(),
-          }));
-        for (const event of events) {
-          if (this.verifiedSocial.has(event)) continue;
-          const p = this.verifiedPayloads.get(event)!;
-          if (p.purpose !== 'post') throw new Error('Unexpected shared payload');
-          const key = `${event.getSender()}:${p.id}`;
-          if (roomSeen.has(key)) continue;
-          const records = await this.download(p);
-          const r = records[0];
-          if (
-            records.length !== 1 ||
-            !r ||
-            r.privateOnly ||
-            !['post', 'photo', 'album'].includes(r.kind) ||
-            r.sourcePath ||
-            Object.keys(r.provenance ?? {}).length ||
-            r.attachments.some(
-              (a, i) => a.mimeType !== 'image/png' || a.path !== `photo-${i + 1}.png`,
-            )
-          )
-            throw new Error('Invalid shared copy');
-          roomSeen.add(key);
-          const conversation = socialState(
-            { id: p.id, sender: event.getSender()! },
-            social.filter(
-              (e) => e.payload.postId === p.id && e.payload.postSender === event.getSender(),
+  private async conversationEvents(roomId: string, peer: string): Promise<MatrixEvent[]> {
+    await this.readGuard(roomId, peer);
+    for (const [key, value] of this.unavailable)
+      if (value.roomId === roomId) this.unavailable.delete(key);
+    const events: MatrixEvent[] = [];
+    for await (const event of this.scanEvents(roomId, peer, undefined, true, true))
+      events.push(event);
+    const posts = new Set(
+      events.flatMap((event) => {
+        const p = this.verifiedPayloads.get(event);
+        return p?.purpose === 'post' ? [`${event.getSender()}:${p.id}`] : [];
+      }),
+    );
+    const operations = new Map<string, string>(),
+      conflicting = new Set<string>();
+    for (const event of events) {
+      const action = this.verifiedSocial.get(event);
+      if (!action) continue;
+      const key = `${event.getSender()}\0${action.id}`,
+        fingerprint = canonical(action);
+      if (operations.has(key) && operations.get(key) !== fingerprint) conflicting.add(key);
+      operations.set(key, fingerprint);
+    }
+    return events.filter((event) => {
+      const action = this.verifiedSocial.get(event);
+      if (action && conflicting.has(`${event.getSender()}\0${action.id}`)) {
+        this.quarantine(roomId, event, 'integrity');
+        return false;
+      }
+      const content = this.verifiedPayloads.get(event);
+      if (content && content.purpose !== 'post') {
+        this.quarantine(roomId, event, 'integrity');
+        return false;
+      }
+      const p = this.verifiedSocial.get(event);
+      if (p && !posts.has(`${p.postSender}:${p.postId}`)) {
+        this.quarantine(roomId, event, 'integrity');
+        return false;
+      }
+      return true;
+    });
+  }
+  private conversationState(
+    event: MatrixEvent,
+    events: MatrixEvent[],
+    includeRemovedComments = false,
+  ): SocialState {
+    const p = this.verifiedPayloads.get(event)!;
+    const mapping = new Map<SocialEvent, MatrixEvent>();
+    const social = events.flatMap((candidate) => {
+      const payload = this.verifiedSocial.get(candidate);
+      if (!payload || payload.postId !== p.id || payload.postSender !== event.getSender())
+        return [];
+      const value = { payload, sender: candidate.getSender()!, timestamp: candidate.getTs() };
+      mapping.set(value, candidate);
+      return [value];
+    });
+    return socialState({ id: p.id, sender: event.getSender()! }, social, {
+      includeRemovedComments,
+      onInvalid: (invalid) =>
+        this.quarantine(event.getRoomId()!, mapping.get(invalid), 'integrity'),
+    });
+  }
+  private async postView(
+    event: MatrixEvent,
+    peer: string,
+    readOnly: boolean,
+    state: SocialState,
+  ): Promise<SharedPost> {
+    const p = this.verifiedPayloads.get(event)!;
+    if (p.purpose !== 'post' || !event.getId()) throw new Error('Invalid shared post');
+    let record: MemoryRecord;
+    let decodedPixels = 0;
+    if (p.version === 3) {
+      record = { ...p.record, attachments: [] };
+      const key = `${event.getRoomId()}\0${event.getId()}`;
+      if (this.lazyPosts.size >= 500) this.lazyPosts.delete(this.lazyPosts.keys().next().value!);
+      this.lazyPosts.set(key, { payload: p, event, peer });
+    } else {
+      const records = await this.download(p);
+      record = records[0];
+      if (
+        records.length !== 1 ||
+        !record ||
+        record.privateOnly ||
+        !['post', 'photo', 'album'].includes(record.kind) ||
+        record.sourcePath ||
+        Object.keys(record.provenance ?? {}).length ||
+        record.attachments.some(
+          (a, i) =>
+            !(
+              (a.mimeType === 'image/png' && a.path === `photo-${i + 1}.png`) ||
+              (a.mimeType === 'image/jpeg' && a.path === `photo-${i + 1}.jpg`)
             ),
-          );
-          if (conversation.removed) continue;
-          if (!event.getId()) throw new Error('Post event identity unavailable');
-          roomPosts.push({
-            eventId: event.getId()!,
-            comments: conversation.comments,
-            reactions: conversation.reactions,
-            id: p.id,
-            roomId: room.roomId,
-            sender: event.getSender()!,
-            timestamp: event.getTs(),
-            record: r,
-          });
-        }
-        if (social.some((e) => !roomSeen.has(`${e.payload.postSender}:${e.payload.postId}`)))
-          throw new Error('Social action references an unknown post');
-        result.push(...roomPosts);
-      } catch (error) {
-        this.locked.push({
-          ...room,
-          reason:
-            error instanceof Error && error.message === 'Encrypted history is unavailable'
-              ? 'Some history has no usable decryption key. Recover with your saved kit or a surviving device. Comparing identities again cannot replace a missing key.'
-              : 'Check this friend’s identity in Friends. If already checked, the content or room permissions could not be verified.',
-        });
+        )
+      )
+        throw new Error('Invalid shared copy');
+      if (record.attachments.length > CONTENT_LIMITS.legacySharedPhotos)
+        throw new PhotoPresentationLimit();
+      // Older producers emitted full-size PNGs. Preserve their 40M-pixel input
+      // compatibility rather than applying the new v3 JPEG derivative limits.
+      for (const attachment of record.attachments) {
+        const dimensions = validatePhotoHeader(
+          new Uint8Array(
+            await attachment.bytes.slice(0, SHARED_PHOTO_LIMITS.headerBytes).arrayBuffer(),
+          ),
+          attachment.mimeType,
+          attachment.bytes.size,
+        );
+        decodedPixels += dimensions.width * dimensions.height;
+        if (decodedPixels > CONTENT_LIMITS.legacyDecodedPixels) throw new PhotoPresentationLimit();
       }
     }
-    return result.sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id));
+    const post: SharedPost = {
+      eventId: event.getId()!,
+      id: p.id,
+      roomId: event.getRoomId()!,
+      sender: event.getSender()!,
+      timestamp: event.getTs(),
+      sharedAt: event.getTs(),
+      originalTimestamp: record.timestamp,
+      record,
+      comments: state.comments,
+      reactions: state.reactions,
+      readOnly,
+      mediaLoaded: p.version === 2 || p.photos.length === 0,
+      ...(p.version === 3
+        ? {
+            media: p.photos.map((photo) => ({
+              path: photo.path,
+              mimeType: photo.mimeType,
+              size: photo.file.size,
+            })),
+          }
+        : {}),
+    };
+    this.legacyPostPixels.set(post, decodedPixels);
+    return post;
+  }
+  /** New v3 post text is signed metadata; fetching photos is a separate deliberate read. */
+  async hydratePost(post: SharedPost): Promise<SharedPost> {
+    const cached = this.lazyPosts.get(`${post.roomId}\0${post.eventId}`);
+    if (!cached) {
+      if (!post.mediaLoaded) throw new Error('Post page expired; reload before opening photos');
+      const room = this.conversationRooms().find((room) => room.roomId === post.roomId);
+      if (!room) throw new Error('Conversation unavailable');
+      await this.readGuard(post.roomId, room.userId);
+      const event = this.room(post.roomId)
+        .getLiveTimeline()
+        .getEvents()
+        .find((event) => event.getId() === post.eventId);
+      if (!event) throw new Error('Post event unavailable');
+      await this.trusted(event, post.roomId);
+      if (this.verifiedPayloads.get(event)?.id !== post.id)
+        throw new Error('Post identity mismatch');
+      return this.postView(event, room.userId, room.readOnly, {
+        removed: false,
+        comments: post.comments,
+        reactions: post.reactions,
+      });
+    }
+    await this.readGuard(post.roomId, cached.peer);
+    await this.trusted(cached.event, post.roomId);
+    const p = this.verifiedPayloads.get(cached.event);
+    if (!p || p.version !== 3 || p.id !== post.id || canonical(p) !== canonical(cached.payload))
+      throw new Error('Shared post changed');
+    const attachments: MemoryRecord['attachments'] = [];
+    for (const [index, photo] of p.photos.entries()) {
+      let bytes: Blob;
+      if (post.mediaLoaded) {
+        const attachment = post.record.attachments[index];
+        if (
+          post.record.attachments.length !== p.photos.length ||
+          !attachment ||
+          attachment.path !== photo.path ||
+          attachment.mimeType !== photo.mimeType ||
+          attachment.bytes.size !== photo.file.size
+        )
+          throw new Error('Loaded shared photo binding mismatch');
+        bytes = attachment.bytes;
+      } else {
+        const plain = await this.downloadPart(photo.file);
+        bytes = new Blob([plain], { type: photo.mimeType });
+        plain.fill(0);
+      }
+      if ((await sha(bytes)) !== photo.sha256) throw new Error('Shared photo identity mismatch');
+      const dimensions = validatePhotoHeader(
+        new Uint8Array(await bytes.slice(0, SHARED_PHOTO_LIMITS.headerBytes).arrayBuffer()),
+        photo.mimeType,
+        bytes.size,
+      );
+      if (
+        dimensions.width > SHARED_PHOTO_LIMITS.outputEdge ||
+        dimensions.height > SHARED_PHOTO_LIMITS.outputEdge
+      )
+        throw new Error('Shared photo exceeds prepared dimensions');
+      attachments.push({ path: photo.path, mimeType: photo.mimeType, bytes });
+    }
+    return { ...post, record: { ...p.record, attachments }, mediaLoaded: true };
+  }
+  async postsPage(
+    cursor?: string,
+    limit: number = CONTENT_LIMITS.feedPageSize,
+    roomId?: string,
+  ): Promise<{ posts: SharedPost[]; nextCursor?: string; limited?: boolean }> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50)
+      throw new Error('Feed page size must be 1–50');
+    const generation = cursor ? this.feedGeneration : ++this.feedGeneration;
+    let offset = 0;
+    if (cursor) {
+      if (cursor.length > 4096) throw new Error('Invalid feed cursor');
+      const value = object(JSON.parse(decodeURIComponent(cursor)));
+      exact(value, ['snapshot', 'offset']);
+      if (
+        typeof value.snapshot !== 'string' ||
+        !Number.isSafeInteger(value.offset) ||
+        Number(value.offset) < 0 ||
+        !this.feedSnapshot ||
+        value.snapshot !== this.feedSnapshot.id ||
+        this.feedSnapshot.roomId !== roomId ||
+        Date.now() - this.feedSnapshot.created > 300000
+      )
+        throw new Error('Feed cursor expired; refresh the feed');
+      offset = Number(value.offset);
+      if (offset > this.feedSnapshot.entries.length) throw new Error('Invalid feed cursor');
+    } else {
+      const rooms = this.conversationRooms().filter((room) =>
+        roomId ? room.roomId === roomId : !isBlocked(this.client, room.userId),
+      );
+      if (!roomId) {
+        // Choose a bounded metadata window before downloading any media. Active
+        // conversations precede departed history; recency is an untrusted hint,
+        // never a substitute for the signature/audience checks below.
+        const now = Date.now();
+        const activity = new Map(
+          rooms.map((entry) => {
+            const events = this.client.getRoom(entry.roomId)?.getLiveTimeline().getEvents() ?? [];
+            const last = events.at(-1)?.getTs() ?? 0;
+            return [entry.roomId, Number.isFinite(last) ? Math.min(now, Math.max(0, last)) : 0];
+          }),
+        );
+        rooms.sort(
+          (a, b) =>
+            Number(a.readOnly) - Number(b.readOnly) ||
+            activity.get(b.roomId)! - activity.get(a.roomId)! ||
+            a.roomId.localeCompare(b.roomId),
+        );
+      }
+      if (roomId && !rooms.length) throw new Error('Conversation unavailable');
+      const snapshot: NonNullable<ContentStore['feedSnapshot']> = {
+        ...(roomId ? { roomId } : {}),
+        id: crypto.randomUUID(),
+        created: Date.now(),
+        limited: false,
+        entries: [],
+      };
+      this.locked = [];
+      let metadataBytes = 0,
+        inspected = 0;
+      scan: for (let i = 0; i < rooms.length; i++) {
+        const room = { ...rooms[i] };
+        if (i >= CONTENT_LIMITS.archiveRoomsPerPage || Date.now() - snapshot.created > 30000) {
+          snapshot.limited = true;
+          break;
+        }
+        try {
+          try {
+            await this.requireVerifiedUser(room.userId);
+          } catch {
+            room.readOnly = true;
+            this.locked.push({
+              ...room,
+              reason:
+                'Check this friend’s identity. Only independently authenticated historical content can be read.',
+            });
+          }
+          const events = await this.conversationEvents(room.roomId, room.userId),
+            seen = new Set<string>();
+          for (const event of events) {
+            if (++inspected > 50000 || Date.now() - snapshot.created > 30000) {
+              snapshot.limited = true;
+              break scan;
+            }
+            const p = this.verifiedPayloads.get(event);
+            if (!p || p.purpose !== 'post') continue;
+            const key = `${event.getSender()}:${p.id}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            metadataBytes += new TextEncoder().encode(JSON.stringify(p)).length;
+            if (metadataBytes > 64 * 1024 * 1024) {
+              snapshot.limited = true;
+              break scan;
+            }
+            snapshot.entries.push({
+              event,
+              events,
+              peer: room.userId,
+              readOnly: room.readOnly,
+              id: p.id,
+            });
+          }
+          if (this.unavailableContent().some((part) => part.roomId === room.roomId))
+            this.locked.push({
+              ...room,
+              reason:
+                'Some events are unavailable or failed verification; valid posts remain readable.',
+            });
+        } catch (error) {
+          this.locked.push({
+            ...room,
+            reason:
+              error instanceof HistoryScanLimit
+                ? 'History exceeds this read budget; retry after synchronization.'
+                : 'This conversation could not be verified.',
+          });
+          snapshot.limited ||= error instanceof HistoryScanLimit;
+        }
+      }
+      snapshot.entries.sort(
+        (a, b) =>
+          b.event.getTs() - a.event.getTs() ||
+          String(a.event.getRoomId()).localeCompare(String(b.event.getRoomId())) ||
+          String(a.event.getId()).localeCompare(String(b.event.getId())),
+      );
+      if (generation !== this.feedGeneration) throw new Error('Feed refresh superseded');
+      this.feedSnapshot = snapshot;
+    }
+    const snapshot = this.feedSnapshot!,
+      posts: SharedPost[] = [];
+    let bytes = 0,
+      decodedPixels = 0;
+    for (; offset < snapshot.entries.length; offset++) {
+      const entry = snapshot.entries[offset],
+        { event, events, peer } = entry;
+      const p = this.verifiedPayloads.get(event)!;
+      const size =
+        p.version === 3
+          ? new TextEncoder().encode(JSON.stringify(p)).length
+          : 'file' in p
+            ? p.file.size
+            : p.size;
+      if (posts.length >= limit || (posts.length && bytes + size > CONTENT_LIMITS.feedPageBytes))
+        break;
+      if (size > CONTENT_LIMITS.feedPageBytes) {
+        this.quarantine(event.getRoomId()!, event, 'limit');
+        snapshot.limited = true;
+        continue;
+      }
+      try {
+        await this.readGuard(event.getRoomId()!, peer);
+        await this.trusted(event, event.getRoomId()!);
+        if (this.verifiedPayloads.get(event)?.id !== entry.id)
+          throw new Error('Post changed during pagination');
+        for (const social of events) {
+          const action = this.verifiedSocial.get(social);
+          if (action?.postId === entry.id && action.postSender === event.getSender()) {
+            try {
+              await this.trusted(social, event.getRoomId()!);
+            } catch {
+              this.verifiedSocial.delete(social);
+              this.quarantine(event.getRoomId()!, social, 'integrity');
+            }
+          }
+        }
+        const state = this.conversationState(event, events);
+        if (state.removed) continue;
+        const post = await this.postView(event, peer, entry.readOnly, state);
+        const pixels = this.legacyPostPixels.get(post) ?? 0;
+        if (posts.length && decodedPixels + pixels > CONTENT_LIMITS.legacyDecodedPixels) break;
+        decodedPixels += pixels;
+        posts.push(post);
+        bytes += size;
+      } catch (error) {
+        this.quarantine(
+          event.getRoomId()!,
+          event,
+          error instanceof PhotoPresentationLimit ? 'limit' : 'integrity',
+        );
+        snapshot.limited ||= error instanceof PhotoPresentationLimit;
+      }
+    }
+    if (generation !== this.feedGeneration) throw new Error('Feed refresh superseded');
+    return {
+      posts,
+      ...(offset < snapshot.entries.length
+        ? { nextCursor: encodeURIComponent(JSON.stringify({ snapshot: snapshot.id, offset })) }
+        : {}),
+      ...(snapshot.limited ? { limited: true } : {}),
+    };
+  }
+  async posts(): Promise<SharedPost[]> {
+    return (await this.postsPage()).posts;
+  }
+  /** Independent portable parts; a cursor explicitly identifies remaining export content. */
+  async exportConversationPage(
+    roomId: string,
+    cursor?: string,
+    limit = 20,
+  ): Promise<{ blob: Blob; nextCursor?: string }> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+      throw new Error('Conversation export page size must be 1–100');
+    const room = this.conversationRooms().find((room) => room.roomId === roomId);
+    if (!room) throw new Error('Conversation unavailable');
+    await this.readGuard(roomId, room.userId);
+    let offset = 0,
+      snapshot = this.conversationExports.get(roomId);
+    if (cursor) {
+      const value = object(JSON.parse(decodeURIComponent(cursor)));
+      exact(value, ['snapshot', 'offset']);
+      if (
+        cursor.length > 4096 ||
+        !snapshot ||
+        value.snapshot !== snapshot.id ||
+        !Number.isSafeInteger(value.offset) ||
+        Number(value.offset) < 0 ||
+        Number(value.offset) > snapshot.units.length ||
+        Date.now() - snapshot.created > 300000
+      )
+        throw new Error('Conversation export cursor expired; restart export');
+      offset = Number(value.offset);
+    } else {
+      const events = await this.conversationEvents(roomId, room.userId),
+        seen = new Set<string>();
+      snapshot = { id: crypto.randomUUID(), created: Date.now(), units: [], peer: room.userId };
+      for (const event of events) {
+        const p = this.verifiedPayloads.get(event);
+        if (!p || p.purpose !== 'post') continue;
+        const key = `${event.getSender()}:${p.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const state = this.conversationState(event, events, true);
+        snapshot.units.push({ event, state });
+        for (const comment of state.comments) snapshot.units.push({ event, state, comment });
+        if (snapshot.units.length > 50000)
+          throw new Error('Conversation history exceeds export scan limit');
+      }
+      if (this.conversationExports.size >= 16)
+        this.conversationExports.delete(this.conversationExports.keys().next().value!);
+      this.conversationExports.set(roomId, snapshot);
+    }
+    const records: MemoryRecord[] = [];
+    let bytes = 0;
+    for (; offset < snapshot!.units.length; offset++) {
+      if (records.length >= limit) break;
+      const unit = snapshot!.units[offset],
+        p = this.verifiedPayloads.get(unit.event)!;
+      const expectedBytes = unit.comment
+        ? unit.comment.text.length * 4 + 4096
+        : p.version === 3
+          ? p.photos.reduce((n, photo) => n + photo.file.size, JSON.stringify(p).length)
+          : 'file' in p
+            ? p.file.size
+            : p.size;
+      if (records.length && bytes + expectedBytes > 96 * 1024 * 1024) break;
+      try {
+        await this.trusted(unit.event, roomId);
+        if (this.verifiedPayloads.get(unit.event)?.id !== p.id)
+          throw new Error('Post changed during export');
+        let record: MemoryRecord;
+        if (unit.comment) {
+          const c = unit.comment;
+          // Reverify the source event rather than trusting a mutable caller-owned comment object.
+          const source = this.room(roomId)
+            .getLiveTimeline()
+            .getEvents()
+            .find(
+              (event) =>
+                this.verifiedSocial.get(event)?.id === c.id && event.getSender() === c.sender,
+            );
+          if (!source) throw new Error('Comment source unavailable');
+          await this.trusted(source, roomId);
+          const action = this.verifiedSocial.get(source);
+          if (
+            !action ||
+            action.kind !== 'comment' ||
+            action.postId !== p.id ||
+            action.postSender !== unit.event.getSender() ||
+            action.text !== c.text
+          )
+            throw new Error('Comment changed during export');
+          record = {
+            id: `comment-${await sha(`${roomId}\0${p.id}\0${c.sender}\0${c.id}`)}`,
+            kind: 'message',
+            title: 'Conversation comment',
+            text: c.text,
+            timestamp: c.timestamp,
+            sourcePath: '',
+            attachments: [],
+            privateOnly: true,
+            provenance: {
+              conversation: {
+                roomId,
+                postId: p.id,
+                postSender: unit.event.getSender(),
+                sender: c.sender,
+                commentId: c.id,
+                removed: c.removed === true,
+              },
+            },
+          };
+        } else {
+          const post = await this.hydratePost(
+            await this.postView(unit.event, snapshot!.peer, true, unit.state),
+          );
+          record = {
+            ...post.record,
+            id: `conversation-${await sha(`${roomId}\0${post.sender}\0${post.id}`)}`,
+            privateOnly: true,
+            provenance: {
+              conversation: {
+                roomId,
+                eventId: post.eventId,
+                sender: post.sender,
+                postId: post.id,
+                sharedAt: post.sharedAt,
+                removed: unit.state.removed,
+              },
+            },
+          };
+        }
+        const size = this.recordBytes(record);
+        if (bytes + size > CONTENT_LIMITS.visibleBytes)
+          throw new Error('Conversation record exceeds export byte limit');
+        bytes += size;
+        records.push(record);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('export byte limit')) throw error;
+        this.quarantine(
+          roomId,
+          unit.event,
+          error instanceof PhotoPresentationLimit ? 'limit' : 'integrity',
+        );
+      }
+    }
+    const unavailable = this.unavailableContent().filter((part) => part.roomId === roomId);
+    records.push({
+      id: `conversation-export-${await sha(`${roomId}\0${cursor ?? 'first'}`)}`,
+      kind: 'message',
+      title: 'Private conversation export',
+      text: `${unavailable.length} unavailable content part(s). Includes earlier copies of posts and replies marked removed, with their removal status in provenance. Permissions and friendships were not restored.`,
+      timestamp: null,
+      sourcePath: '',
+      attachments: [],
+      privateOnly: true,
+      provenance: {
+        conversationExport: {
+          roomId,
+          peer: room.userId,
+          includesRemoved: true,
+          unavailable,
+          hasMore: offset < snapshot!.units.length,
+        },
+      },
+    });
+    const blob = await exportArchives(records);
+    snapshot!.created = Date.now(); // Active multi-part exports renew their in-memory cursor lease.
+    return {
+      blob,
+      ...(offset < snapshot!.units.length
+        ? { nextCursor: encodeURIComponent(JSON.stringify({ snapshot: snapshot!.id, offset })) }
+        : {}),
+    };
+  }
+  async exportConversation(roomId: string): Promise<Blob> {
+    const page = await this.exportConversationPage(roomId, undefined, 100);
+    if (page.nextCursor)
+      throw new Error('Conversation requires paged export; download each conversation part');
+    return page.blob;
   }
 }

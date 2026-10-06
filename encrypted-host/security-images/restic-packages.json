@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "ownership": "project-derived-not-official",
+  "platform": "linux/arm64",
+  "base": "restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510",
+  "packageOrigin": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/",
+  "packages": [
+    {
+      "package": "jq",
+      "version": "1.8.2-r0",
+      "sha256": "1c146410d19ea643e81414352bc259ef9d2bf75d8c7208334614cca124a13f43"
+    },
+    {
+      "package": "libcrypto3",
+      "version": "3.5.9-r0",
+      "sha256": "2676a2b0b6e23ea2edccf3ee982b9842a665d52603d047de3d0a185dc316d983"
+    },
+    {
+      "package": "libssl3",
+      "version": "3.5.9-r0",
+      "sha256": "20ac252b276d73f2c69c1d25f84537c7fba81caefc026c6be1094b394af2082e"
+    },
+    {
+      "package": "openssh-client-common",
+      "version": "10.3_p1-r1",
+      "sha256": "0c381b466c2d3bc2c36d69f596c43737c70863e412da688a245834757b0760ee"
+    },
+    {
+      "package": "openssh-client-default",
+      "version": "10.3_p1-r1",
+      "sha256": "6f036ca1883da46635853a6efabc0381cd6660ab7a69da93e19cfe39ad7869bc"
+    },
+    {
+      "package": "openssh-keygen",
+      "version": "10.3_p1-r1",
+      "sha256": "e7214cdc3bfa4f10ea518de24dbc101e2462688473175654945ad2e7aebd52e0"
+    }
+  ]
+}

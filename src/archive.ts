@@ -690,6 +690,7 @@ export class Archive {
           throw new Error('Choose either extracted folders or a set of ZIP parts, not both.');
         let usedBytes = 0;
         let usedFiles = 0;
+        const combined = new Map<string, string>();
         for (const [name, zipPath] of zipParts.sort(([a], [b]) => a.localeCompare(b))) {
           check();
           const partRoot = join(extraction, digest(name).slice(0, 16));
@@ -705,10 +706,17 @@ export class Archive {
           );
           const partFiles = await scanDirectory(partRoot, this.limits, check);
           usedFiles += partFiles.size;
-          for (const file of partFiles.values()) usedBytes += (await lstat(file)).size;
+          for (const [inside, file] of partFiles) {
+            if (combined.has(inside))
+              throw new Error(
+                'Two ZIP parts contain the same internal path. Choose one complete export without overlapping parts.',
+              );
+            combined.set(inside, file);
+            usedBytes += (await lstat(file)).size;
+          }
         }
         root = extraction;
-        files = await scanDirectory(root, this.limits, check);
+        files = combined;
       }
       if (portable) {
         files = portable.mediaFiles;
@@ -782,14 +790,16 @@ export class Archive {
             title: record.title,
             occurredAt: record.occurredAt,
             metadata: record.metadata,
-            media: mediaIds.map(
-              (mid) =>
-                (
-                  this.store.db
-                    .prepare('SELECT sha256 FROM archive_media WHERE id=?')
-                    .get(mid) as Row
-                ).sha256,
-            ),
+            media: mediaIds.map((mid) => {
+              const saved = this.store.db
+                .prepare('SELECT sha256 FROM archive_media WHERE id=? AND owner_id=?')
+                .get(mid, row.owner_id) as Row | undefined;
+              if (!saved)
+                throw new ArchiveAdmissionError(
+                  'A photo changed during import. Nothing was committed; select the original files and retry.',
+                );
+              return saved.sha256;
+            }),
           }),
         );
         const duplicate = seenRecords.get(record.sourceKey);
@@ -867,6 +877,17 @@ export class Archive {
       check();
       this.store.transaction(() => {
         check();
+        const missing = this.store.db
+          .prepare(
+            `SELECT 1 FROM archive_stage s, json_each(json_extract(s.record,'$.mediaIds')) ids
+          LEFT JOIN archive_media m ON m.id=ids.value AND m.owner_id=?
+          WHERE s.job_id=? AND m.id IS NULL LIMIT 1`,
+          )
+          .get(row.owner_id, id);
+        if (missing)
+          throw new ArchiveAdmissionError(
+            'A photo changed during import. Nothing was committed; select the original files and retry.',
+          );
         // Hold one writer transaction while enforcing a running exact byte/count budget.
         // Re-scanning every stored body for each staged row makes a large import quadratic.
         let ownerCount = this.count(row.owner_id);
@@ -1487,9 +1508,9 @@ export class Archive {
       for (const mediaId of mediaIds) {
         const linked = this.store.db
           .prepare(
-            `SELECT 1 FROM archive_items i,json_each(i.media_ids) m WHERE i.owner_id=? AND m.value=? UNION ALL SELECT 1 FROM archive_versions v,json_each(json_extract(v.record,'$.mediaIds')) m WHERE v.owner_id=? AND m.value=? LIMIT 1`,
+            `SELECT 1 FROM archive_items i,json_each(i.media_ids) m WHERE i.owner_id=? AND m.value=? UNION ALL SELECT 1 FROM archive_versions v,json_each(json_extract(v.record,'$.mediaIds')) m WHERE v.owner_id=? AND m.value=? UNION ALL SELECT 1 FROM archive_stage s JOIN archive_jobs j ON j.id=s.job_id, json_each(json_extract(s.record,'$.mediaIds')) m WHERE j.owner_id=? AND j.status IN ('queued','running') AND m.value=? LIMIT 1`,
           )
-          .get(ownerId, mediaId, ownerId, mediaId);
+          .get(ownerId, mediaId, ownerId, mediaId, ownerId, mediaId);
         if (!linked) {
           const media = this.media(ownerId, mediaId);
           if (media?.purpose === 'original') {

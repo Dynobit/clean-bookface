@@ -53,6 +53,12 @@ async function enter(page: Page, home: string, username: string): Promise<string
   await visibleOrError(page, page.getByRole('heading', { name: 'What’s on your mind?' }));
   return account.userId;
 }
+async function refreshUntilVisible(page: Page, target: Locator): Promise<void> {
+  await expect(async () => {
+    await page.locator('#refresh-book').click();
+    await expect(target).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
+}
 test('independent homes share only selected memories after a real identity comparison', async ({
   browser,
 }) => {
@@ -94,6 +100,7 @@ test('independent homes share only selected memories after a real identity compa
   };
   const zip = await exportArchives([record, photo, privateOnly]);
   await a.getByRole('button', { name: 'My memories', exact: true }).click();
+  await expect(a.getByLabel('Choose archive ZIP files')).toBeEnabled();
   await a.getByLabel('Choose archive ZIP files').setInputFiles({
     name: 'synthetic-memory.zip',
     mimeType: 'application/zip',
@@ -139,7 +146,7 @@ test('independent homes share only selected memories after a real identity compa
   await a.getByLabel('Write a post').fill(shared);
   await a
     .getByRole('checkbox', {
-      name: bobId,
+      name: `${bobId} · identity checked`,
       exact: true,
     })
     .check();
@@ -148,31 +155,33 @@ test('independent homes share only selected memories after a real identity compa
     timeout: 30_000,
   });
   await b.getByRole('button', { name: 'News feed', exact: true }).click();
-  await b.getByRole('button', { name: 'Refresh my book', exact: true }).click();
-  await expect(b.locator('.post-body').filter({ hasText: shared })).toBeVisible({
-    timeout: 30_000,
-  });
+  await refreshUntilVisible(b, b.locator('.post-body').filter({ hasText: shared }));
   await expect(b.locator('.post-body').filter({ hasText: marker })).toHaveCount(0);
   await a.getByRole('button', { name: 'My memories', exact: true }).click();
   const photoCard = a
     .locator('article')
     .filter({ has: a.locator('.post-body').filter({ hasText: photoMarker }) });
   await photoCard.getByText('Share this memory', { exact: true }).click();
-  await photoCard.getByRole('checkbox', { name: bobId, exact: true }).check();
+  await photoCard
+    .getByRole('checkbox', { name: `${bobId} · identity checked`, exact: true })
+    .check();
   await photoCard.getByRole('button', { name: 'Share selected copy', exact: true }).click();
   await expect(a.locator('#notice')).toHaveText(
-    'Shared a separate copy. Your original is still private.',
+    'Shared with the people you selected. Recovery backup checked.',
     { timeout: 30000 },
   );
   const privateCard = a
     .locator('article')
     .filter({ has: a.locator('.post-body').filter({ hasText: privateOnly.text }) });
   await expect(privateCard.getByText('Share this memory', { exact: true })).toHaveCount(0);
-  await b.getByRole('button', { name: 'Refresh my book', exact: true }).click();
+  await b.locator('#refresh-book').click();
   const received = b
     .locator('article')
     .filter({ has: b.locator('.post-body').filter({ hasText: photoMarker }) });
-  await expect(received).toBeVisible({ timeout: 30000 });
+  await refreshUntilVisible(b, received);
+  // Browser lazy decoding requires an actual viewport intersection.
+  await received.scrollIntoViewIfNeeded();
+  await received.locator('img').scrollIntoViewIfNeeded();
   await expect
     .poll(() => received.locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth))
     .toBe(24);
@@ -189,7 +198,11 @@ test('independent homes share only selected memories after a real identity compa
       pixel: Array.from(ctx.getImageData(0, 0, 1, 1).data),
     };
   });
-  expect(pixels).toEqual({ width: 24, height: 16, pixel: [59, 89, 152, 255] });
+  expect({ width: pixels.width, height: pixels.height }).toEqual({ width: 24, height: 16 });
+  // Shared copies are metadata-free JPEG derivatives; allow bounded codec rounding.
+  for (const [channel, expected] of [59, 89, 152].entries())
+    expect(Math.abs(pixels.pixel[channel] - expected)).toBeLessThanOrEqual(2);
+  expect(pixels.pixel[3]).toBe(255);
   await expect(b.locator('.post-body').filter({ hasText: marker })).toHaveCount(0);
   // Flush each device's key backup before discarding its browser storage. This
   // lets a later run recover the retained pair's encrypted conversation history.

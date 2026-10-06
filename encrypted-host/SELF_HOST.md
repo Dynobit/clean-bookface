@@ -1,10 +1,10 @@
 # Install a private encrypted home
 
-This recipe is for one Linux ARM64 server with Docker Engine, Compose, Python 3 and systemd. The exact Synapse/PostgreSQL ARM64 images are pinned in `images.json`; x86/AMD64 is not qualified by these pins; see [architecture support](ARCHITECTURE.md) before choosing a server. Caddy uses the existing project release digest. Allow space for the live database/media plus local backup staging and retained snapshots. Backups briefly pause this home's Synapse while capturing consistent data.
+This recipe is for one Linux ARM64 server with Docker Engine, Compose, Python 3 and systemd. The exact Synapse/PostgreSQL ARM64 images are pinned in `images.json`; x86/AMD64 is not qualified by these pins; see [architecture support](ARCHITECTURE.md) before choosing a server. Caddy uses the existing project release digest. Allow space for the live database/media plus local backup staging and retained snapshots. Backups pre-copy data on the runtime disk, then pause this home's Synapse for file reconciliation and a database dump. Pause time still depends on file count, changed bytes, database size and restart readiness.
 
 Use a dedicated server or verify ports 80 and 443 are free. Point a DNS hostname such as `matrix.circle.example` to it and permit inbound TCP 80/443 on that server. Do not expose 8008 or PostgreSQL. This guide does not modify machine routing, existing proxies or unrelated services. Obtain the reviewed source release on the server at a stable path, for example `/opt/clean-bookface`, before proceeding.
 
-Publish the encrypted browser build independently, following [its guide](../encrypted-client/README.md), at a separate trusted origin such as `https://client.example`. The storage server must not control that client publisher or its delivery credentials. A different hostname alone does not establish independence. The storage host never serves the browser application in this recipe.
+Publish the encrypted browser build independently, following [its guide](../encrypted-client/README.md), at a separate trusted origin such as `https://client.example`. The storage server must not control that client publisher or its delivery credentials. A different hostname alone does not establish independence. The storage host never serves the browser application in this recipe. The project publishes the preview client at `https://app.cleanbookface.org`; it remains a fictional-data preview, not a qualified service for personal archives. Obtain the expected publisher origin independently of the home invitation, bookmark it, and check the browser address before entering credentials or a recovery kit. The host chooses the URL embedded in its invitations, so an invitation alone cannot authenticate the client. A shared CDN is also a shared delivery trust dependency even with separate origins and credentials; select genuinely independent delivery if that dependency is unacceptable.
 
 ## Start the home
 
@@ -63,7 +63,7 @@ For federation with a separate identity hostname, route that identity hostname t
 python3 encrypted-host/operations.py invite --runtime /srv/clean-bookface-encrypted
 ```
 
-Privately send the contents of `/srv/clean-bookface-encrypted/invitation-link.txt` to the intended person. The link opens the independent browser, prefills the home and one-use invitation, and expires after one hour. Its token is in the URL fragment, which browsers do not send in HTTP requests. The browser removes that fragment after reading it. It remains a secret in any messaging application or clipboard used to deliver it. Members need only their browser, an account password and a saved recovery kit; no server account or terminal is needed.
+Privately send the contents of `/srv/clean-bookface-encrypted/invitation-link.txt` to the intended person. The link opens the independent browser, prefills the home and one-use invitation, and expires after one hour by default. For someone joining later, add `--expiry-hours 48` (whole hours, maximum 168). Each invocation writes a fresh one-use token and replaces the private link file; previously issued unused tokens remain valid until their own expiry. Send one invitation per person through an established private channel. Members request a link from their host; they cannot issue invitations themselves. The host still needs this CLI; there is no browser administration service. Its token is in the URL fragment, which browsers do not send in HTTP requests. The browser removes that fragment after reading it. It remains a secret in any messaging application or clipboard used to deliver it. Members need only their browser, an account password and a saved recovery kit; no server account or terminal is needed. Losing both the recovery kit and every usable device makes the encrypted history permanently unrecoverable. A host password reset or server backup cannot recreate those keys; no identity-reset/start-over flow is provided.
 
 ## Set up verified daily backups
 
@@ -99,15 +99,17 @@ The schedule command prints a unique unit name such as `cbf-e2ee-0123456789-back
 ```sh
 sudo install -m 0644 /srv/clean-bookface-encrypted/cbf-e2ee-0123456789-backup.service /etc/systemd/system/
 sudo install -m 0644 /srv/clean-bookface-encrypted/cbf-e2ee-0123456789-backup.timer /etc/systemd/system/
-sudo systemd-analyze verify /etc/systemd/system/cbf-e2ee-0123456789-backup.service /etc/systemd/system/cbf-e2ee-0123456789-backup.timer
+sudo install -m 0644 /srv/clean-bookface-encrypted/cbf-e2ee-0123456789-backup-health.service /etc/systemd/system/
+sudo install -m 0644 /srv/clean-bookface-encrypted/cbf-e2ee-0123456789-backup-health.timer /etc/systemd/system/
+sudo systemd-analyze verify /etc/systemd/system/cbf-e2ee-0123456789-backup.service /etc/systemd/system/cbf-e2ee-0123456789-backup.timer /etc/systemd/system/cbf-e2ee-0123456789-backup-health.service /etc/systemd/system/cbf-e2ee-0123456789-backup-health.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now cbf-e2ee-0123456789-backup.timer
-sudo systemctl list-timers cbf-e2ee-0123456789-backup.timer
+sudo systemctl enable --now cbf-e2ee-0123456789-backup.timer cbf-e2ee-0123456789-backup-health.timer
+sudo systemctl list-timers cbf-e2ee-0123456789-backup.timer cbf-e2ee-0123456789-backup-health.timer
 ```
 
 The timer runs daily at 03:00 local time with up to 15 minutes of jitter; `Persistent=true` catches a missed run after shutdown. Reinstalling the generated units is repeatable. The service runs as root to use the system Docker daemon; its configuration contains only paths, never password contents. Secure the stable source path and runtime against untrusted writes. For rootless Docker, this system service recipe needs a separately qualified user service/daemon context.
 
-To change destination, rerun `backup-configure`, perform `backup-run`, and check health. To remove scheduling, disable this exact timer and remove its two unit files; do not delete snapshots or change unrelated services. All dated snapshots are retained: monitor repository capacity and adopt/test an explicit retention policy before any pruning. A writable second-host account cannot protect snapshots against deletion by someone holding that account's credentials.
+To change destination, rerun `backup-configure`, perform `backup-run`, and check health. To remove scheduling, disable this exact timer and remove its four unit files; do not delete snapshots or change unrelated services. Snapshots are retained by default. Optional manually invoked retention requires a dry-run inspection and a recent verified backup; see [retention](OPERATIONS.md#optional-retention). A writable second-host account cannot protect snapshots against deletion by someone holding that account's credentials.
 
 ## Restore and acceptance
 
@@ -137,3 +139,9 @@ python3 encrypted-host/moderation.py suspend --runtime /srv/clean-bookface-encry
 Suspension blocks messages, invites, joins and profile changes while preserving the account. It does not delete copies or prevent reading previously accessible content. The CLI refuses nonexistent accounts, remote users and administrators, verifies the changed state, and saves a private receipt. Review an appeal through the published human contact and use `unsuspend` with a fresh reason file to reverse the decision. Administrator sessions are logged out after each operation. Neither reports nor decision text is printed into ordinary command output. Choose an explicit retention period for the private reports and receipts; the encrypted database backup also retains report data until its snapshots expire.
 
 API reference: [Synapse reversible account suspension](https://element-hq.github.io/synapse/latest/admin_api/user_admin_api.html#suspendunsuspend-account), [reported events](https://element-hq.github.io/synapse/latest/admin_api/event_reports.html).
+
+## Local health and resource limits
+
+Install both generated service/timer pairs. The health timer runs five minutes after boot and every fifteen minutes thereafter; an unhealthy result exits nonzero and marks its systemd service failed. `backup-health`, `host.py status`, and private `backup-status.json` expose current failed, stale, running, never-run or configuration-mismatch state for the existing local dashboard. `backup-health.json` preserves the last successful snapshot while recording failed attempts. These controls send no email, Slack message or external notification. A dashboard must actually consume this status; the tools do not promise someone will notice it. Inspect `systemctl status <project>-backup-health.service` and `backup-last.log` locally after an error.
+
+New Compose specifications drop all capabilities, deny privilege escalation, limit Synapse to 1536 MiB/256 processes and PostgreSQL to 768 MiB/128 processes, and rotate each container's JSON logs at three 10 MiB files. PostgreSQL retains only CHOWN, DAC_OVERRIDE, FOWNER, SETGID and SETUID for its official root entrypoint's volume initialization and gosu transition. Synapse runs as the existing unprivileged UID. These are small-home starting limits, not a capacity claim. Large imports or database growth may require measured adjustments and repeat qualification. Generated changes do not retrofit running installations; review their exact Compose diff before a separately authorized rollout.

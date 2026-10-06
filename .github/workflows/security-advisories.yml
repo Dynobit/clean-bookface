@@ -1,0 +1,96 @@
+name: Dependency security signals
+on:
+  schedule:
+    - cron: '23 8 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/security-advisories.yml'
+      - '.github/dependabot.yml'
+      - 'scripts/pinned-host-images.mjs'
+      - 'tests/pinned-host-images.test.ts'
+      - 'package-lock.json'
+      - 'encrypted-client/package-lock.json'
+      - 'encrypted-host/images.json'
+      - 'encrypted-host/operations.py'
+      - 'encrypted-host/recovery.py'
+permissions:
+  contents: read
+jobs:
+  npm-advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ['.', 'encrypted-client']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Audit locked runtime and build dependencies
+        working-directory: ${{ matrix.directory }}
+        run: npm audit --package-lock-only --audit-level=moderate
+      - name: Record check scope
+        if: always()
+        env:
+          CHECK_STATUS: ${{ job.status }}
+          PACKAGE_DIRECTORY: ${{ matrix.directory }}
+        run: |
+          printf 'npm advisory check: %s — %s\n' "$PACKAGE_DIRECTORY" "$CHECK_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          printf 'A failed/unavailable audit is not evidence of no vulnerabilities. No package was upgraded or deployed.\n' >> "$GITHUB_STEP_SUMMARY"
+  image-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.inventory.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - id: inventory
+        run: |
+          node scripts/pinned-host-images.mjs > "$RUNNER_TEMP/pinned-images.json"
+          printf 'matrix=%s\n' "$(cat "$RUNNER_TEMP/pinned-images.json")" >> "$GITHUB_OUTPUT"
+  image-advisories:
+    needs: image-inventory
+    # Production locks are ARM64; the scanner reads images and never runs them.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.image-inventory.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan exact production digest
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ matrix.image }}
+          grype-version: v0.120.0
+          fail-build: true
+          severity-cutoff: medium
+          only-fixed: false
+          output-format: table
+          cache-db: false
+        env:
+          GRYPE_DB_AUTO_UPDATE: 'true'
+          GRYPE_DB_VALIDATE_AGE: 'true'
+          GRYPE_DB_MAX_ALLOWED_BUILT_AGE: 120h
+      - name: Record check scope
+        if: always()
+        env:
+          CHECK_STATUS: ${{ job.status }}
+          COMPONENT: ${{ matrix.component }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          printf 'Pinned-image advisory check: %s — %s\n\n%s\n' "$COMPONENT" "$CHECK_STATUS" "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Scanner/database/registry failure leaves this check failed; it does not establish an advisory-free image. No runtime or image pin was changed.\n' >> "$GITHUB_STEP_SUMMARY"

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createArchiveClient, validateOrigin } from '../src/identity';
-import { createClient } from 'matrix-js-sdk';
+import { createClient, MatrixError } from 'matrix-js-sdk';
 
 test('archive clients disable SDK call handlers and TURN requests in a calling-capable browser', async () => {
   const before = ['window', 'document'].map((key) =>
@@ -138,4 +138,392 @@ test('Rust proof rejects same-ID unconnected ratchets and metadata substitution'
     await backupKeyCoversLocal(later, { ...early, room_id: '!other:example.invalid' }),
     false,
   );
+});
+
+import { EventEmitter } from 'node:events';
+import { Identity } from '../src/identity';
+import {
+  VerificationPhase,
+  VerificationRequestEvent,
+  VerifierEvent,
+} from 'matrix-js-sdk/lib/crypto-api';
+
+test('friend SAS still exposes accept, comparison and confirmation for the selected peer', async () => {
+  const identity: any = Reflect.construct(Identity, [{ userId: '@alice:example.org' }, {}]);
+  const request: any = new EventEmitter();
+  const verifier: any = new EventEmitter();
+  let accepted = 0,
+    started = 0,
+    confirmed = 0;
+  const sas = {
+    sas: { decimal: [1234, 5678, 9012] },
+    confirm: async () => {
+      confirmed++;
+    },
+    mismatch() {},
+  };
+  Object.assign(verifier, { getShowSasCallbacks: () => null, verify: () => new Promise(() => {}) });
+  Object.assign(request, {
+    otherUserId: '@bob:example.org',
+    transactionId: 'friend-check',
+    phase: VerificationPhase.Requested,
+    initiatedByMe: false,
+    accept: async () => {
+      accepted++;
+    },
+    cancel: async () => {},
+    startVerification: async () => {
+      started++;
+      request.verifier = verifier;
+      request.phase = VerificationPhase.Started;
+    },
+  });
+  let view: any;
+  identity.onVerification = (next: any) => {
+    view = next;
+  };
+  identity.watch(request);
+  assert.equal(view.peer, '@bob:example.org');
+  await view.accept();
+  request.phase = VerificationPhase.Ready;
+  request.emit(VerificationRequestEvent.Change);
+  await view.compare();
+  verifier.emit(VerifierEvent.ShowSas, sas);
+  assert.deepEqual(view.decimal, sas.sas.decimal);
+  await view.confirm();
+  assert.deepEqual([accepted, started, confirmed], [1, 1, 1]);
+});
+
+test('SAS Done waits for verifier completion and authenticated trust; exact terminal replay is suppressed', async () => {
+  const scope = {
+    baseUrl: 'https://synthetic.invalid',
+    userId: '@a:synthetic.invalid',
+    deviceId: 'A',
+  };
+  const stored = new Map<string, string>();
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    },
+  });
+  try {
+    let finish!: () => void;
+    let trust!: () => void;
+    let upload!: () => void;
+    const uploaded = new Promise<void>((resolve) => {
+      upload = resolve;
+    });
+    const verified = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const trusted = new Promise<void>((resolve) => {
+      trust = resolve;
+    });
+    const identity: any = Reflect.construct(Identity, [scope, {}]);
+    identity.requireVerifiedUser = () => trusted;
+    identity.waitForVerifiedUser = () => identity.requireVerifiedUser();
+    const views: any[] = [];
+    identity.onVerification = (view: any) => views.push(view);
+    const verifier = Object.assign(new EventEmitter(), {
+      verify: () => verified,
+      getShowSasCallbacks: () => ({
+        sas: { decimal: [1234, 5678, 9012] },
+        confirm: () => uploaded,
+      }),
+    });
+    const request = Object.assign(new EventEmitter(), {
+      otherUserId: '@b:synthetic.invalid',
+      transactionId: 'exact-request',
+      phase: VerificationPhase.Started,
+      verifier,
+      cancel: async () => {},
+    });
+    identity.watch(request);
+    const confirming = views.at(-1).confirm();
+    request.phase = VerificationPhase.Done;
+    request.emit(VerificationRequestEvent.Change);
+    assert.equal(views.at(-1).phase, 'confirming');
+    finish();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(views.at(-1).phase, 'confirming');
+    trust();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(views.at(-1).phase, 'confirming');
+    upload();
+    await confirming;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(views.at(-1).phase, 'done');
+    assert.equal(stored.size, 1);
+    const reopened: any = Reflect.construct(Identity, [scope, {}]);
+    let shown = 0,
+      cancelled = 0;
+    reopened.onVerification = () => shown++;
+    reopened.watch(
+      Object.assign(new EventEmitter(), {
+        otherUserId: request.otherUserId,
+        transactionId: request.transactionId,
+        phase: VerificationPhase.Requested,
+        cancel: async () => {
+          cancelled++;
+        },
+      }),
+    );
+    assert.equal(shown, 0);
+    assert.equal(cancelled, 1);
+    reopened.watch(
+      Object.assign(new EventEmitter(), {
+        otherUserId: request.otherUserId,
+        transactionId: 'fresh-request',
+        phase: VerificationPhase.Requested,
+        cancel: async () => {},
+      }),
+    );
+    assert.equal(shown, 1, 'fresh checks remain available for changed identities');
+    Identity.forgetVerificationHistory({ ...scope, deviceId: 'OTHER' });
+    assert.equal(stored.size, 1);
+    Identity.forgetVerificationHistory(scope);
+    assert.equal(stored.size, 0);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'localStorage', original);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
+});
+
+test('SAS completion fails closed when peer trust or durable terminal storage fails', async () => {
+  for (const failed of ['trust', 'storage']) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error('Synthetic quota');
+        },
+      },
+    });
+    try {
+      const identity: any = Reflect.construct(Identity, [
+        { baseUrl: 'https://synthetic.invalid', userId: '@a:synthetic.invalid', deviceId: 'A' },
+        {},
+      ]);
+      identity.waitForVerifiedUser = () => identity.requireVerifiedUser();
+      identity.requireVerifiedUser = async () => {
+        if (failed === 'trust') throw new Error('Untrusted');
+      };
+      const views: any[] = [];
+      identity.onVerification = (view: any) => views.push(view);
+      const verifier = Object.assign(new EventEmitter(), {
+        verify: async () => {},
+        getShowSasCallbacks: () => null,
+      });
+      identity.watch(
+        Object.assign(new EventEmitter(), {
+          otherUserId: '@b:synthetic.invalid',
+          transactionId: failed,
+          phase: VerificationPhase.Done,
+          verifier,
+          cancel: async () => {},
+        }),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(views.at(-1).phase, 'confirming');
+      assert.match(views.at(-1).failure, /could not be authenticated/);
+      assert.equal(
+        views.some((view) => view.phase === 'done'),
+        false,
+      );
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'localStorage', original);
+      else Reflect.deleteProperty(globalThis, 'localStorage');
+    }
+  }
+});
+
+test('malformed terminal journal rejects checks and capacity stays bounded', () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  let value = '["not-a-tuple"]';
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => value,
+      setItem: (_: string, next: string) => {
+        value = next;
+      },
+    },
+  });
+  try {
+    const scope = {
+      baseUrl: 'https://synthetic.invalid',
+      userId: '@a:synthetic.invalid',
+      deviceId: 'A',
+    };
+    const identity: any = Reflect.construct(Identity, [scope, {}]);
+    let rejected = 0,
+      shown = 0;
+    identity.onVerificationRejected = () => rejected++;
+    identity.onVerification = () => shown++;
+    identity.watch(
+      Object.assign(new EventEmitter(), {
+        otherUserId: '@b:synthetic.invalid',
+        transactionId: 'fresh',
+        phase: VerificationPhase.Requested,
+      }),
+    );
+    assert.equal(rejected, 1);
+    assert.equal(shown, 0);
+    value = JSON.stringify(
+      Array.from({ length: 512 }, (_, i) => JSON.stringify(['@b:synthetic.invalid', `old-${i}`])),
+    );
+    identity.terminalVerification('@b:synthetic.invalid', 'newest', true);
+    assert.equal(JSON.parse(value).length, 512);
+    assert.equal(identity.terminalVerification('@b:synthetic.invalid', 'newest'), true);
+    assert.equal(identity.terminalVerification('@b:synthetic.invalid', 'old-0'), false);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'localStorage', original);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
+});
+
+test('authenticated completion follows local trust events and times out without trusting an event alone', async () => {
+  const client = new EventEmitter();
+  const identity: any = Reflect.construct(Identity, [{ userId: '@a:synthetic.invalid' }, client]);
+  let trusted = false;
+  identity.requireVerifiedUser = async () => {
+    if (!trusted) throw new Error('Still unverified');
+  };
+  const { CryptoEvent } = await import('matrix-js-sdk/lib/crypto-api');
+  const waiting = identity.waitForVerifiedUser('@b:synthetic.invalid', 1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  trusted = true;
+  client.emit(CryptoEvent.UserTrustStatusChanged, '@b:synthetic.invalid');
+  await waiting;
+  assert.equal(client.listenerCount(CryptoEvent.UserTrustStatusChanged), 0);
+  trusted = false;
+  const denied = identity.waitForVerifiedUser('@b:synthetic.invalid', 10);
+  client.emit(CryptoEvent.UserTrustStatusChanged, '@b:synthetic.invalid');
+  await assert.rejects(denied, /Still unverified/);
+  assert.equal(client.listenerCount(CryptoEvent.UserTrustStatusChanged), 0);
+});
+
+test('logout recognizes only confirmed unknown-token 401 and preserves transport failures', async () => {
+  const oldFetch = globalThis.fetch;
+  const session = {
+    baseUrl: 'https://fictional.example',
+    userId: '@a:fictional.example',
+    deviceId: 'A',
+    accessToken: 'synthetic',
+  };
+  try {
+    for (const [status, errcode, ended] of [
+      [401, 'M_UNKNOWN_TOKEN', true],
+      [403, 'M_UNKNOWN_TOKEN', false],
+      [401, 'M_FORBIDDEN', false],
+    ] as const) {
+      const error = new MatrixError({ errcode, error: 'Synthetic' }, status);
+      assert.equal(Identity.sessionIsInvalid(error), ended);
+      globalThis.fetch = async () => Response.json(error.data, { status });
+      if (ended) await Identity.logoutSession(session);
+      else
+        await assert.rejects(
+          Identity.logoutSession(session),
+          (error) => error instanceof MatrixError && error.httpStatus === status,
+        );
+    }
+    assert.equal(
+      Identity.sessionIsInvalid({ httpStatus: 401, data: { errcode: 'M_UNKNOWN_TOKEN' } }),
+      false,
+    );
+    globalThis.fetch = async () => {
+      throw new Error('Synthetic network failure');
+    };
+    await assert.rejects(Identity.logoutSession(session), /Synthetic network failure/);
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+});
+
+test('SAS cancellation still reaches its peer when terminal storage fails and blocks queued Done first', async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('Synthetic journal quota');
+      },
+    },
+  });
+  try {
+    for (const failTransport of [false, true]) {
+      const identity: any = Reflect.construct(Identity, [
+        { baseUrl: 'https://synthetic.invalid', userId: '@a:synthetic.invalid', deviceId: 'A' },
+        {},
+      ]);
+      const scope = { roomId: '!room:synthetic.invalid', transactionId: 'cancel-during-quota' };
+      identity.beginVerificationConfirmation(scope);
+      const gate = identity.verificationMacs.get(
+        JSON.stringify([scope.roomId, scope.transactionId]),
+      );
+      let attempts = 0,
+        delivered = 0;
+      const request = Object.assign(new EventEmitter(), {
+        ...scope,
+        otherUserId: '@b:synthetic.invalid',
+        phase: VerificationPhase.Started,
+        cancel: async () => {
+          attempts++;
+          assert.equal(
+            gate.state,
+            'failed',
+            'queued Done is blocked before peer cancellation starts',
+          );
+          request.phase = VerificationPhase.Cancelled;
+          request.emit(VerificationRequestEvent.Change);
+          if (failTransport) throw new Error('Synthetic cancellation transport failure');
+          delivered++;
+        },
+      });
+      const views: any[] = [],
+        failures: string[] = [];
+      identity.onVerification = (view: any) => views.push(view);
+      identity.onVerificationRejected = (message: string) => failures.push(message);
+      identity.watch(request);
+      await assert.rejects(views.at(-1).cancel(), (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors.length, failTransport ? 2 : 1);
+        assert.match(
+          error.message,
+          failTransport ? /could not be sent or saved/ : /could not be saved/,
+        );
+        return true;
+      });
+      await assert.rejects(gate.promise, /cancelled/);
+      assert.equal(attempts, 1);
+      assert.equal(delivered, failTransport ? 0 : 1);
+      assert.equal(views.at(-1).phase, 'cancelled');
+      assert.equal(
+        views.some((view) => view.phase === 'done'),
+        false,
+      );
+      assert.equal(
+        views.slice(1).every((view) => view.phase === 'cancelled'),
+        true,
+        'synchronous cancellation cannot reopen a recovery dialog',
+      );
+      assert.equal(
+        identity.terminalVerifications.size,
+        0,
+        'failed persistence is never represented as durable',
+      );
+      assert.equal(failures.length, 1);
+      assert.match(failures[0], /could not be.*saved/);
+    }
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'localStorage', original);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
 });

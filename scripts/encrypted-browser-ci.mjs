@@ -25,12 +25,19 @@ const suites = new Set([
   'social-lifecycle',
   'local-cleanup',
   'large-import',
+  'identity-recovery',
+  'import-recovery',
+  'sharing-hardening',
+  'social-visual',
+  'identity-delta',
 ]);
+const suiteFile = (suite) =>
+  ({ 'social-visual': 'social-lifecycle', 'identity-delta': 'identity-recovery' })[suite] || suite;
 // Reports can contain access tokens, recovery keys and decrypted page text. Only
 // emit source-owned static titles, bounded line numbers, counts and fixed enums.
 export function safeFailureSummary(report, suite) {
   if (!suites.has(suite)) return { classification: 'unrecognized-suite' };
-  const file = `encrypted-client/tests/browser/${suite}.spec.ts`;
+  const file = `encrypted-client/tests/browser/${suiteFile(suite)}.spec.ts`;
   const source = readFileSync(join(root, file), 'utf8');
   const lineCount = source.split('\n').length;
   const titles = new Set([...source.matchAll(/\btest\(\s*'([^'\n]+)'/g)].map((m) => m[1]));
@@ -55,7 +62,7 @@ export function safeFailureSummary(report, suite) {
           const error = result.error || result.errors?.[0];
           const frame =
             typeof error?.stack === 'string'
-              ? error.stack.match(new RegExp(`${suite}\\.spec\\.ts:(\\d+):(\\d+)`))
+              ? error.stack.match(new RegExp(`${suiteFile(suite)}\\.spec\\.ts:(\\d+):(\\d+)`))
               : null;
           const rawLine = Number(frame?.[1] || error?.location?.line || spec.line);
           failures.push({
@@ -216,7 +223,7 @@ function qualify(options) {
     const baseURL = `http://127.0.0.1:${options['client-port']}`;
     const config = {
       testDir: join(client, 'tests', 'browser'),
-      testMatch: `${options.suite}.spec.ts`,
+      testMatch: `${suiteFile(options.suite)}.spec.ts`,
       timeout: 120_000,
       globalTimeout: 900_000,
       workers: 1,
@@ -255,13 +262,17 @@ function qualify(options) {
     const configPath = join(work, 'playwright.config.mjs');
     // Standby recovery and opt-in private screenshots remain separate qualification.
     // Exclude only those named manual cases; every admitted test must run without skips.
-    const exclude =
+    const selection =
       options.suite === 'journey'
         ? ', grepInvert: /a restored standby opens signed memories/'
         : options.suite === 'social-lifecycle'
           ? ', grepInvert: /(?:^| )capture the real encrypted feed with fictional memories$/'
-          : '';
-    writeFileSync(configPath, `export default { ...${JSON.stringify(config)}${exclude} };\n`, {
+          : options.suite === 'social-visual'
+            ? ', grep: /capture the real encrypted feed with fictional memories$/'
+            : options.suite === 'identity-delta'
+              ? ', grep: /\\[delta\\]/'
+              : '';
+    writeFileSync(configPath, `export default { ...${JSON.stringify(config)}${selection} };\n`, {
       mode: 0o600,
     });
     const env = {
@@ -272,6 +283,8 @@ function qualify(options) {
       CBF_TEST_RECOVERY_KITS: join(work, 'recovery-kits.json'),
     };
     delete env.CBF_TEST_STANDBY;
+    if (options.suite === 'social-visual') env.CBF_SCREENSHOT_DIRECTORY = join(work, 'screenshots');
+    else delete env.CBF_SCREENSHOT_DIRECTORY;
     console.log(
       `Running ${options.suite}; diagnostics and recovery kits remain in the private work directory`,
     );

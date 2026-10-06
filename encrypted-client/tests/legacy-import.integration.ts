@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { legacyFixture } from './legacy-fixture.js';
 import { importArchives } from '../src/archive.js';
+import { importArchiveBatches } from '../src/streaming-import.js';
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 test('actual v0.1 authenticated account HTTP export imports locally with exact text, original media hashes and revisions', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cbf-legacy-browser-'));
@@ -17,6 +18,28 @@ test('actual v0.1 authenticated account HTTP export imports locally with exact t
   };
   try {
     const result = await importArchives([file]);
+    const streamed = [];
+    let scratchRemoved = false;
+    for await (const batch of importArchiveBatches([file], {
+      openTemporaryFile: async () => {
+        const ciphertext: Uint8Array<ArrayBuffer>[] = [];
+        return {
+          writable: new WritableStream({
+            write: (chunk) => {
+              ciphertext.push(new Uint8Array(chunk));
+            },
+          }),
+          blob: async () => new Blob(ciphertext),
+          remove: async () => {
+            ciphertext.length = 0;
+            scratchRemoved = true;
+          },
+        };
+      },
+    }))
+      streamed.push(...batch.records);
+    assert.deepEqual(streamed, result.records);
+    assert.equal(scratchRemoved, true);
     assert.equal(result.records.length, items.length + 3); // one prior revision, publication, comment
     const current = result.records.find((r) => r.id === items[0].id)!;
     assert.equal(current.text, items[0].body);

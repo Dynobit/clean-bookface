@@ -2,17 +2,17 @@
 
 This is a short session for someone who has never used Clean Bookface. It is a test plan, not a claim that a study has happened. Invite people who do not run servers; include someone who uses a phone and someone who relies on keyboard or assistive navigation.
 
-Use a disposable installation and fictional accounts. Follow the [development guide](DEVELOPMENT.md) to start the local demo. The facilitator handles setup and provides a test invitation and the synthetic archive from `tests/fixtures/synthetic/facebook`. Keep the demo on your own machine; its published password is not suitable for internet hosting.
+Use a disposable installation and fictional accounts. Follow the [encrypted host guide](../encrypted-host/SELF_HOST.md) and [browser client instructions](../encrypted-client/README.md#try-a-fictional-circle-locally) to start a disposable encrypted circle. Record the exact client build and host versions. The facilitator handles setup and provides a test invitation and the synthetic archive from `tests/fixtures/synthetic/facebook`. Use fresh single-use invitations and fictional credentials. Do not use a public demo password.
 
 Tell each participant: “We are testing the software, not you. Please say what you expect to happen. You can stop whenever you want.” Do not ask for a Facebook password, their own download, their real contacts, or a recording of personal accounts.
 
 ## Give these tasks one at a time
 
-1. **Join.** Open the test invitation, create a fictional account and save the recovery codes. What do you think your host can see?
+1. **Join.** Open the test invitation, create a fictional account and save the recovery kit. What do you think your host can see?
 2. **Bring a memory home.** Find the getting-started instructions and import the provided fictional archive. Find its photo and private conversation. Who can see them now?
 3. **Share with one friend.** Connect to the facilitator's fictional account, review a photo, and share it with that person. Check that importing alone did not publish it. Explain whether a new friend would automatically see an old post.
 4. **Change your mind.** Stop sharing the photo, find the block/report controls, and explain what they can and cannot remove from somebody else's saved copies.
-5. **Leave with your history.** Find export and account deletion. Download the test account, then explain the difference between deleting this account and deleting a Facebook account. Check that the instructions say to keep and verify a separate copy first.
+5. **Leave with your history.** Find export and account deletion. Download all saved import parts and conversation parts, recover on a fresh browser with the kit, then explain the difference between deleting this account and deleting a Facebook account. Check that the instructions say to keep and verify a separate copy first.
 
 Let people try before explaining. When help is needed, record the point of confusion and the exact assistance. Do not count a guided completion as an unassisted one. Stop any step that risks using real personal data.
 
