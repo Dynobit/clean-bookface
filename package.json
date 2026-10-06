@@ -44,7 +44,7 @@
     "@types/yauzl": "3.4.0",
     "@types/yazl": "3.3.1",
     "prettier": "3.9.9",
-    "temporal-polyfill": "1.0.1",
+    "temporal-polyfill": "1.0.5",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   },
