@@ -4,7 +4,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Small, practical improvements are welcome. Use fictional examples only; do not attach Facebook archives, screenshots of real members, credentials or private configuration.
+        Small, practical improvements are welcome. Check [community priorities](https://github.com/Dynobit/clean-bookface/blob/main/docs/BACKLOG.md#community-priorities) and existing issues first. For encrypted successor work, coordinate with [draft PR #4](https://github.com/Dynobit/clean-bookface/pull/4). Use fictional examples only; do not attach Facebook archives, screenshots of real members, credentials or private configuration.
 
         For a security or privacy flaw, follow [the security reporting policy](https://github.com/Dynobit/clean-bookface/blob/main/SECURITY.md).
   - type: textarea
@@ -21,3 +21,13 @@ body:
       description: Describe the behavior you would like to see. It is fine to describe the need without knowing the technical solution.
     validations:
       required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: How could we check that it works?
+      description: If you can, suggest one small example of success and say whether this concerns the v0.1 preview or the encrypted draft. You do not need a technical solution.
+  - type: textarea
+    id: contribution
+    attributes:
+      label: Would you like to help?
+      description: Optional. Tell us which part you would like to try, such as documentation, accessibility, testing or implementation. There is no obligation to take it on.

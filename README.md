@@ -8,13 +8,13 @@ A social network should tell you how your friends are doing. It shouldn't need t
 
 Clean Bookface is a small, self-hosted social network with the feel of early Facebook: a blue bar, photos, comments and friends' posts in order. It can also give your Facebook download a home. Your old memories stay private until you choose to share them.
 
-**[Join a friend](docs/GETTING_STARTED.md#3-join-a-circle-you-trust)** · **[Bring your memories](docs/GETTING_STARTED.md)** · **[Host your own circle](docs/HOST_YOUR_CIRCLE.md)**
+**[Join a friend](docs/GETTING_STARTED.md#3-join-a-circle-you-trust)** · **[Bring your memories](docs/GETTING_STARTED.md)** · **[Host your own circle](docs/HOST_YOUR_CIRCLE.md)** · **[Help build it](CONTRIBUTING.md)**
 
 _v0.1 public preview · Free software for small circles. There is no official hosting service or public sign-up. Independent human security, accessibility and usability reviews remain open. [Release status](docs/RELEASE.md)._
 
 ![Clean Bookface on desktop: blue navigation, a short friends list and a chronological feed](docs/images/feed-desktop.png)
 
-The actual app, with fictional people and posts.
+The v0.1 app, with fictional people and posts. These are screenshots of working software.
 
 <details>
 <summary>See it on a phone</summary>
@@ -70,13 +70,19 @@ We do have a few things you should know before uploading:
 
 Read the [privacy contract](docs/PRIVACY.md) and [account export and deletion guide](docs/PORTABILITY.md). A host is responsible for explaining their own hosting and retention arrangements.
 
+An encrypted version is being built separately, so a storage host would not receive the keys to your memories. It is **not ready for personal archives** and has not replaced this preview. [Follow the work and its remaining problems in draft PR #4.](https://github.com/Dynobit/clean-bookface/pull/4)
+
 ## Pull up a chair
 
 This is an open-source project in public preview. We'd like people to help maintain it, including people who don't write code.
 
 Found a confusing instruction or a button that doesn't work with your keyboard? That's useful feedback. You can [report a problem](https://github.com/Dynobit/clean-bookface/issues) or suggest a change. **Use made-up examples. Never attach your Facebook download, recovery codes or private conversations.** See [security reporting](SECURITY.md) for vulnerabilities.
 
-Start with [Contributing](CONTRIBUTING.md). [Community stewardship](GOVERNANCE.md) explains how maintenance and decisions can be shared as people join in.
+There are useful jobs waiting: try the instructions, check a screen with a keyboard or screen reader, test a made-up archive, or rehearse a backup. [Pick a small task](docs/BACKLOG.md#community-priorities), then use [Contributing](CONTRIBUTING.md) to find the right branch and checks.
+
+The project is still owner-maintained. We welcome people who want to take responsibility for a part of it; no maintainer group has been appointed yet. [Community stewardship](GOVERNANCE.md) explains how decisions and responsibilities can be shared without giving contributors access to members’ data.
+
+**[Download the released preview](https://github.com/Dynobit/clean-bookface/releases/tag/v0.1.0-preview.1)** · **[See what is tested and what remains](docs/RELEASE.md)** · **[Visit the project website](https://cleanbookface.org/)**
 
 <details>
 <summary><strong>For hosts and developers: installation, backups and technical documentation</strong></summary>
