@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
+    "build": "node ../scripts/client-notices.mjs --check && tsc --noEmit && vite build",
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "preview": "vite preview --host 127.0.0.1",

@@ -54,3 +54,7 @@ The adapter pins the SDK's canonical-JSON signer and one native identity handle.
 `identity.ts` gives each initial sync a fresh namespaced inline-filter field. Synapse otherwise reuses an older initial-sync response for the same filter and device, even when the SDK adds its HTTP cache buster. Incremental sync filters and authentication are preserved. This integration has a real reload/recovery regression test.
 
 SDK upgrades need renewed recipient, forged-backup, historical-recovery and reload tests. Automated review and upstream library audits do not substitute for an independent human review of this integration. [Encryption contract](../docs/ENCRYPTION.md).
+
+## Software credits
+
+The browser build includes this project’s MIT license and the license texts for its pinned production dependencies. The footer links to those credits. After reviewing a dependency update, install its exact lockfile and run `node scripts/client-notices.mjs` from the repository root to regenerate the two files in `encrypted-client/public/`. The build verifies those texts against the installed packages and refuses stale notices. Keep both text files in every published static build and downloadable bundle.

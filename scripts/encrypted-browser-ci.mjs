@@ -26,6 +26,78 @@ const suites = new Set([
   'local-cleanup',
   'large-import',
 ]);
+// Reports can contain access tokens, recovery keys and decrypted page text. Only
+// emit source-owned static titles, bounded line numbers, counts and fixed enums.
+export function safeFailureSummary(report, suite) {
+  if (!suites.has(suite)) return { classification: 'unrecognized-suite' };
+  const file = `encrypted-client/tests/browser/${suite}.spec.ts`;
+  const source = readFileSync(join(root, file), 'utf8');
+  const lineCount = source.split('\n').length;
+  const titles = new Set([...source.matchAll(/\btest\(\s*'([^'\n]+)'/g)].map((m) => m[1]));
+  const count = (value) =>
+    Number.isSafeInteger(value) && value >= 0 && value <= 100000 ? value : 0;
+  const classify = (error) => {
+    const message = typeof error?.message === 'string' ? error.message : '';
+    if (/webServer/i.test(message) && /timed? ?out|timeout/i.test(message))
+      return 'preview-startup-timeout';
+    if (/executable.*doesn.t exist|browserType\.launch/i.test(message)) return 'browser-launch';
+    if (/timed? ?out|timeout/i.test(message)) return 'timeout';
+    if (/expect\(|assertion/i.test(message)) return 'assertion';
+    return 'test-or-runner-error';
+  };
+  const failures = [];
+  function visit(node) {
+    if (!node || typeof node !== 'object' || failures.length >= 20) return;
+    for (const spec of Array.isArray(node.specs) ? node.specs : []) {
+      for (const test of Array.isArray(spec.tests) ? spec.tests : []) {
+        for (const result of Array.isArray(test.results) ? test.results : []) {
+          if (!['failed', 'timedOut', 'interrupted'].includes(result.status)) continue;
+          const error = result.error || result.errors?.[0];
+          const frame =
+            typeof error?.stack === 'string'
+              ? error.stack.match(new RegExp(`${suite}\\.spec\\.ts:(\\d+):(\\d+)`))
+              : null;
+          const rawLine = Number(frame?.[1] || error?.location?.line || spec.line);
+          failures.push({
+            title: titles.has(spec.title) ? spec.title : 'Unrecognized test title omitted',
+            file,
+            line: Number.isInteger(rawLine) && rawLine > 0 && rawLine <= lineCount ? rawLine : null,
+            classification: classify(error),
+          });
+          if (failures.length >= 20) return;
+        }
+      }
+    }
+    for (const child of Array.isArray(node.suites) ? node.suites : []) visit(child);
+  }
+  visit(report);
+  return {
+    suite,
+    counts: Object.fromEntries(
+      ['expected', 'unexpected', 'flaky', 'skipped'].map((key) => [
+        key,
+        count(report?.stats?.[key]),
+      ]),
+    ),
+    failures,
+    runnerErrors: (Array.isArray(report?.errors) ? report.errors : []).slice(0, 10).map(classify),
+  };
+}
+function printSafeFailure(work, suite) {
+  try {
+    console.error(
+      'Browser failure summary: ' +
+        JSON.stringify(
+          safeFailureSummary(
+            JSON.parse(readFileSync(join(work, 'browser-results.json'), 'utf8')),
+            suite,
+          ),
+        ),
+    );
+  } catch {
+    console.error('Browser failure summary: report unavailable; private diagnostics retained');
+  }
+}
 function parse(argv) {
   const options = {};
   for (let i = 0; i < argv.length; i++) {
@@ -230,6 +302,7 @@ function qualify(options) {
       `PASS ${options.suite}: ${report.stats.expected} tests; no failures or skips. Federation and restored-standby qualification are separate.`,
     );
   } catch (error) {
+    printSafeFailure(work, options.suite);
     failed = error;
   }
   try {
@@ -244,11 +317,15 @@ function qualify(options) {
   }
   if (failed) throw failed;
 }
-try {
-  const options = parse(process.argv.slice(2));
-  if (options.cleanup) cleanup(options.work);
-  else qualify(options);
-} catch (error) {
-  console.error(error instanceof Error ? error.message : 'Encrypted browser qualification failed');
-  process.exitCode = 1;
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    const options = parse(process.argv.slice(2));
+    if (options.cleanup) cleanup(options.work);
+    else qualify(options);
+  } catch (error) {
+    console.error(
+      error instanceof Error ? error.message : 'Encrypted browser qualification failed',
+    );
+    process.exitCode = 1;
+  }
 }

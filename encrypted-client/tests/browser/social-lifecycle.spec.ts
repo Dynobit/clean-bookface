@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { exportArchives, type MemoryRecord } from '../../src/archive';
 
@@ -566,7 +566,7 @@ test('account closure still clears secrets when cleanup journal persistence thro
       Storage.prototype.setItem = original;
     };
     Storage.prototype.setItem = function (key, value) {
-      if (key === 'clean-bookface.cleanup.v1')
+      if (key === 'clean-bookface.cleanup.v1' || key.startsWith('clean-bookface.cleanup.v2:'))
         throw new DOMException('Synthetic full storage', 'QuotaExceededError');
       return original.call(this, key, value);
     };
@@ -596,6 +596,226 @@ test('account closure still clears secrets when cleanup journal persistence thro
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.locator('#notice.error')).toBeVisible();
+});
+
+test('two tabs finish their own device cleanup when sign-outs interleave', async ({ browser }) => {
+  test.setTimeout(180_000);
+  const context = await browser.newContext();
+  const a = await context.newPage(),
+    b = await context.newPage();
+  let releaseNavigation = () => {};
+  try {
+    // Load both real invitation forms before either tab signs in. The second
+    // registration then naturally overwrites shared localStorage SESSION while
+    // the first tab keeps its own authenticated device alive.
+    for (const page of [a, b]) {
+      execFileSync(
+        'python3',
+        [
+          fileURLToPath(new URL('../../../encrypted-host/host.py', import.meta.url)),
+          'invite',
+          '--runtime',
+          runtime!,
+        ],
+        { stdio: 'pipe', timeout: 30000 },
+      );
+      const invitation = JSON.parse(readFileSync(join(runtime!, 'invitation.json'), 'utf8'));
+      await page.goto('/#' + new URLSearchParams({ home: state.url, invite: invitation.token }));
+      await expect(
+        page.getByRole('button', { name: 'Create my account', exact: true }),
+      ).toBeVisible();
+    }
+    const scopes: { baseUrl: string; userId: string; deviceId: string }[] = [];
+    for (const page of [a, b]) {
+      const username = 'two_tabs_' + randomUUID().replaceAll('-', ''),
+        password = randomUUID();
+      await page.getByLabel('Username', { exact: true }).fill(username);
+      await page.getByLabel('Password', { exact: true }).fill(password);
+      await page.getByRole('button', { name: 'Create my account', exact: true }).click();
+      await page.getByRole('button', { name: 'Make my recovery kit', exact: true }).click();
+      const key = await page.getByLabel('Your recovery key', { exact: true }).inputValue();
+      writeFileSync(
+        join(runtime!, `${username}.json`),
+        JSON.stringify({ username, password, key }),
+        { mode: 0o600 },
+      );
+      await page.getByLabel('Type the last 6 characters').fill(key.replace(/\s/g, '').slice(-6));
+      await page.getByRole('button', { name: 'I saved it. Open my book.', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'What’s on your mind?' })).toBeVisible({
+        timeout: 65000,
+      });
+      await idle(page);
+      scopes.push(
+        await page.evaluate(() => {
+          const { baseUrl, userId, deviceId } = JSON.parse(
+            localStorage.getItem('clean-bookface.session.v1')!,
+          );
+          return { baseUrl, userId, deviceId };
+        }),
+      );
+    }
+    expect(scopes[0].deviceId).not.toBe(scopes[1].deviceId);
+    const names = scopes.map(({ baseUrl, userId, deviceId }) => {
+      const prefix = `clean-bookface:${baseUrl}:${userId}:${deviceId}`;
+      const hash = createHash('sha256')
+        .update(`clean-bookface-outbox-v1\0${baseUrl}\0${userId}\0${deviceId}`)
+        .digest('hex');
+      return [
+        `${prefix}::matrix-sdk-crypto`,
+        `${prefix}::matrix-sdk-crypto-meta`,
+        `clean-bookface-outbox-${hash}`,
+      ];
+    });
+    const untouched = 'unrelated-two-tab-test';
+    await b.evaluate(async (name) => {
+      localStorage.setItem(name, 'keep this');
+      await new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open(name, 1);
+        request.onsuccess = () => {
+          request.result.close();
+          resolve();
+        };
+        request.onerror = () => reject(request.error);
+      });
+    }, untouched);
+    const stores = () => b.evaluate(async () => (await indexedDB.databases()).map((db) => db.name));
+    // SDK metadata stores may never be created for a fresh device. Require
+    // the real crypto and outbox stores, and track any metadata store present.
+    const initialStores = await stores();
+    const existing = names.map((scope) => scope.filter((name) => initialStores.includes(name)));
+    for (const scope of names)
+      expect(initialStores).toEqual(expect.arrayContaining([scope[0], scope[2]]));
+    let reachedNavigation = () => {};
+    const paused = new Promise<void>((resolve) => {
+      reachedNavigation = resolve;
+    });
+    const resume = new Promise<void>((resolve) => {
+      releaseNavigation = resolve;
+    });
+    await a.route('**/*', async (route) => {
+      if (route.request().isNavigationRequest() && route.request().frame() === a.mainFrame()) {
+        reachedNavigation();
+        await resume;
+      }
+      await route.continue();
+    });
+    await a.getByRole('button', { name: 'My account', exact: true }).click();
+    const aExit = a
+      .getByRole('button', { name: 'Sign out of this browser', exact: true })
+      .click({ noWaitAfter: true });
+    await paused;
+    await aExit;
+    // This is the forced race boundary: A cannot load its cleanup document yet.
+    // A must also preserve B's newer active session in shared localStorage.
+    expect(
+      await b.evaluate(() => {
+        const { baseUrl, userId, deviceId } = JSON.parse(
+          localStorage.getItem('clean-bookface.session.v1')!,
+        );
+        return { baseUrl, userId, deviceId };
+      }),
+    ).toEqual(scopes[1]);
+    expect(await stores()).toEqual(expect.arrayContaining(existing[0]));
+    await b.getByRole('button', { name: 'My account', exact: true }).click();
+    await b.getByRole('button', { name: 'Sign out of this browser', exact: true }).click();
+    await visibleOrError(b, b.getByRole('button', { name: 'Sign in', exact: true }));
+    expect((await stores()).filter((name) => names[1].includes(name!))).toEqual([]);
+    expect(await stores()).toEqual(expect.arrayContaining(existing[0]));
+    releaseNavigation();
+    await visibleOrError(a, a.getByRole('button', { name: 'Sign in', exact: true }));
+    expect((await stores()).filter((name) => names.flat().includes(name!))).toEqual([]);
+    expect(await stores()).toContain(untouched);
+    expect(await b.evaluate((name) => localStorage.getItem(name), untouched)).toBe('keep this');
+    for (const page of [a, b]) {
+      await expect(page.locator('#notice')).toContainText('This browser’s keys have been removed.');
+      expect(
+        await page.evaluate(() => localStorage.getItem('clean-bookface.session.v1')),
+      ).toBeNull();
+      expect(
+        await page.evaluate(() => sessionStorage.getItem('clean-bookface.cleanup.tab.v2')),
+      ).toBeNull();
+    }
+  } finally {
+    releaseNavigation();
+    await context.close();
+  }
+});
+
+test('cleanup reload exposes a retry when reading the shared session is blocked', async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await enter(page, 'alice');
+    await idle(page);
+    const scope = await page.evaluate(() => {
+      const { baseUrl, userId, deviceId } = JSON.parse(
+        localStorage.getItem('clean-bookface.session.v1')!,
+      );
+      return { baseUrl, userId, deviceId };
+    });
+    const prefix = `clean-bookface:${scope.baseUrl}:${scope.userId}:${scope.deviceId}`;
+    const outbox =
+      'clean-bookface-outbox-' +
+      createHash('sha256')
+        .update(`clean-bookface-outbox-v1\0${scope.baseUrl}\0${scope.userId}\0${scope.deviceId}`)
+        .digest('hex');
+    const names = [`${prefix}::matrix-sdk-crypto`, `${prefix}::matrix-sdk-crypto-meta`, outbox];
+    // Only the cleanup document receives this native storage failure. The
+    // journal and per-tab scope remain readable, but SESSION reads are denied.
+    await page.addInitScript(() => {
+      const original = Storage.prototype.getItem;
+      if (!original.call(sessionStorage, 'clean-bookface.cleanup.tab.v2')) return;
+      (window as unknown as { restoreSessionRead: () => void }).restoreSessionRead = () => {
+        Storage.prototype.getItem = original;
+      };
+      Storage.prototype.getItem = function (key) {
+        if (this === localStorage && key === 'clean-bookface.session.v1')
+          throw new DOMException('Synthetic blocked session read', 'SecurityError');
+        return original.call(this, key);
+      };
+    });
+    await page.getByRole('button', { name: 'My account', exact: true }).click();
+    await page.getByRole('button', { name: 'Sign out of this browser', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Retry local key removal', exact: true }),
+    ).toBeVisible({ timeout: 65000 });
+    await expect(page.locator('#notice.error')).toContainText('Local key removal is incomplete.');
+    await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toHaveCount(0);
+    await expect(page.locator('.post-body')).toHaveCount(0);
+    expect(
+      await page.evaluate(() => !!sessionStorage.getItem('clean-bookface.cleanup.tab.v2')),
+    ).toBe(true);
+    await page.evaluate(() =>
+      (window as unknown as { restoreSessionRead: () => void }).restoreSessionRead(),
+    );
+    await page.getByRole('button', { name: 'Retry local key removal', exact: true }).click();
+    // The previous error remains visible until this deliberate retry finishes.
+    await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible({
+      timeout: 65000,
+    });
+    expect(
+      await page.evaluate(
+        async (names) =>
+          (await indexedDB.databases()).filter((db) => names.includes(db.name!)).length,
+        names,
+      ),
+    ).toBe(0);
+    expect(await page.evaluate(() => localStorage.getItem('clean-bookface.session.v1'))).toBeNull();
+    expect(
+      await page.evaluate(() => sessionStorage.getItem('clean-bookface.cleanup.tab.v2')),
+    ).toBeNull();
+    expect(
+      await page.evaluate(() =>
+        Object.keys(localStorage).filter((key) => key.startsWith('clean-bookface.cleanup.v2:')),
+      ),
+    ).toEqual([]);
+    await expect(page.locator('#notice')).toContainText('This browser’s keys have been removed.');
+  } finally {
+    await context.close();
+  }
 });
 
 test('capture the real encrypted feed with fictional memories', async ({ browser }) => {

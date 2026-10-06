@@ -27,6 +27,19 @@ try {
 } catch {
   /* First disposable test run. */
 }
+async function observeCleanup(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const events: { database: string; event: string }[] = [];
+    (window as unknown as { cleanupEvents: typeof events }).cleanupEvents = events;
+    const original = IDBFactory.prototype.deleteDatabase;
+    IDBFactory.prototype.deleteDatabase = function (name: string) {
+      const request = original.call(this, name);
+      for (const event of ['success', 'error', 'blocked'])
+        request.addEventListener(event, () => events.push({ database: name, event }));
+      return request;
+    };
+  });
+}
 async function visibleOrError(page: Page, target: Locator, timeout = 65_000): Promise<void> {
   await Promise.race([
     target.waitFor({ state: 'visible', timeout }),
@@ -34,7 +47,20 @@ async function visibleOrError(page: Page, target: Locator, timeout = 65_000): Pr
       .locator('#notice.error')
       .waitFor({ state: 'visible', timeout })
       .then(async () => {
-        throw new Error((await page.locator('#notice').textContent()) || 'Browser action failed');
+        const message = (await page.locator('#notice').textContent()) || 'Browser action failed';
+        if (message.includes('Local key removal')) {
+          writeFileSync(
+            join(runtime!, 'device-cleanup-failure.json'),
+            JSON.stringify(
+              await page.evaluate(async () => ({
+                events: (window as unknown as { cleanupEvents: unknown }).cleanupEvents,
+                databases: (await indexedDB.databases()).map((db) => db.name),
+              })),
+            ),
+            { mode: 0o600 },
+          );
+        }
+        throw new Error(message);
       }),
   ]);
 }
@@ -44,6 +70,7 @@ async function enter(page: Page, username: string): Promise<void> {
   page.on('request', (request) => {
     if (request.url().includes('/voip/turnServer')) callingRequests.push(request.url());
   });
+  await observeCleanup(page);
   await page.goto('/');
   await page.getByLabel('Your home’s address').fill(state.url);
   await page.getByLabel('Username', { exact: true }).fill(username);
@@ -167,7 +194,8 @@ test('private import survives recovery and verified friends can share', async ({
   await a.getByRole('button', { name: 'My account', exact: true }).click();
   // This revokes the original device, unlike just closing a tab.
   await a.getByRole('button', { name: 'Sign out of this browser', exact: true }).click();
-  await expect(a.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+  // Sign-out first confirms the encrypted key backup, then clears this device.
+  await visibleOrError(a, a.getByRole('button', { name: 'Sign in', exact: true }));
   await ca.close();
   const restored = await browser.newContext();
   const r = await restored.newPage();
@@ -372,6 +400,7 @@ test('an unsigned device receives no keys and a failed publication can be abando
   const a = await ca.newPage(),
     x = await attacker.newPage();
   await enter(a, 'alice');
+  await observeCleanup(x);
   await x.goto('/');
   await x.getByLabel('Your home’s address').fill(state.url);
   await x.getByLabel('Username', { exact: true }).fill('bob');
@@ -427,7 +456,22 @@ test('an unsigned device receives no keys and a failed publication can be abando
   await visibleOrError(a, a.getByRole('button', { name: 'Sign in', exact: true }));
   // Leaving an unopened recovery screen must not require possessing its kit.
   await x.getByRole('button', { name: 'Use a different account', exact: true }).click();
-  await visibleOrError(x, x.getByRole('button', { name: 'Sign in', exact: true }));
+  try {
+    await visibleOrError(x, x.getByRole('button', { name: 'Sign in', exact: true }));
+  } catch (error) {
+    writeFileSync(
+      join(runtime!, 'unopened-device-cleanup.json'),
+      JSON.stringify(
+        await x.evaluate(async () => ({
+          events: (window as unknown as { cleanupEvents: unknown }).cleanupEvents,
+          databases: (await indexedDB.databases()).map((db) => db.name),
+          headings: [...document.querySelectorAll('h2')].map((heading) => heading.textContent),
+        })),
+      ),
+      { mode: 0o600 },
+    );
+    throw error;
+  }
   await ca.close();
   await attacker.close();
 });

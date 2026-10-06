@@ -20,6 +20,8 @@ const notice = document.querySelector<HTMLElement>('#notice')!;
 const verification = document.querySelector<HTMLElement>('#verification')!;
 const SESSION = 'clean-bookface.session.v1';
 const CLEANUP = 'clean-bookface.cleanup.v1';
+const CLEANUP_PREFIX = 'clean-bookface.cleanup.v2:';
+const CLEANUP_TAB = 'clean-bookface.cleanup.tab.v2';
 let identity: Identity | undefined;
 let content: ContentStore | undefined;
 let records: MemoryRecord[] = [];
@@ -35,6 +37,57 @@ let pendingSocial: PendingSocial | null = null;
 let selectedArchivePart: number | null = null;
 type CleanupScope = Pick<Session, 'baseUrl' | 'userId' | 'deviceId'> & { message: string };
 let pendingCleanup: CleanupScope | undefined;
+let pendingCleanupKey: string | undefined;
+
+function cleanupKey(scope: CleanupScope): string {
+  return (
+    CLEANUP_PREFIX +
+    encodeURIComponent(JSON.stringify([scope.baseUrl, scope.userId, scope.deviceId]))
+  );
+}
+function cleanupScope(value: unknown): CleanupScope {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    !['baseUrl', 'userId', 'deviceId', 'message'].every(
+      (key) =>
+        typeof (value as Record<string, unknown>)[key] === 'string' &&
+        (value as Record<string, unknown>)[key],
+    )
+  )
+    throw new Error('Invalid local cleanup record');
+  return value as CleanupScope;
+}
+function storedCleanup(): { key: string; scope: CleanupScope } | undefined {
+  // A tab's journal survives reload without being replaced by another tab's
+  // different device. Keep its exact scope even if another cleanup already
+  // removed the shared record; native deletion is deliberately idempotent.
+  const tab = sessionStorage.getItem(CLEANUP_TAB);
+  if (tab) {
+    const record = JSON.parse(tab);
+    const scope = cleanupScope(record.scope);
+    if (record.key !== cleanupKey(scope)) throw new Error('Invalid tab cleanup scope');
+    return { key: record.key, scope };
+  }
+  const key =
+    Object.keys(localStorage)
+      .filter((name) => name.startsWith(CLEANUP_PREFIX))
+      .sort()[0] || (localStorage.getItem(CLEANUP) ? CLEANUP : undefined);
+  if (!key) return;
+  const scope = cleanupScope(JSON.parse(localStorage.getItem(key)!));
+  if (key !== CLEANUP && key !== cleanupKey(scope)) throw new Error('Invalid stored cleanup scope');
+  return { key, scope };
+}
+function removeMatchingSession(scope: CleanupScope): void {
+  const saved = sessionFromStorage();
+  if (
+    saved &&
+    saved.baseUrl === scope.baseUrl &&
+    saved.userId === scope.userId &&
+    saved.deviceId === scope.deviceId
+  )
+    localStorage.removeItem(SESSION);
+}
 
 // Only fixed markup is used in this file. All account/content values use textContent.
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -1258,9 +1311,17 @@ async function exitLocally(message: string): Promise<void> {
     deviceId: session.deviceId,
     message,
   };
+  let durableCleanup = false;
   try {
     // Exact scope only: no access token or recovery secret in the retry journal.
-    localStorage.setItem(CLEANUP, JSON.stringify(pendingCleanup));
+    const journal = JSON.stringify(pendingCleanup);
+    pendingCleanupKey = cleanupKey(pendingCleanup);
+    localStorage.setItem(pendingCleanupKey, journal);
+    const tabJournal = JSON.stringify({ key: pendingCleanupKey, scope: pendingCleanup });
+    sessionStorage.setItem(CLEANUP_TAB, tabJournal);
+    durableCleanup =
+      localStorage.getItem(pendingCleanupKey) === journal &&
+      sessionStorage.getItem(CLEANUP_TAB) === tabJournal;
   } catch {
     // Cleanup can still finish now. A failed cleanup explicitly says to keep
     // this tab open, since a storage failure prevents a durable retry journal.
@@ -1282,33 +1343,47 @@ async function exitLocally(message: string): Promise<void> {
     verification.replaceChildren();
     clear();
   }
+  if (durableCleanup) {
+    // Rust crypto can retain an IndexedDB connection while in-flight work
+    // drains after stopClient(). Unload that entire crypto context, then let
+    // the startup cleanup branch delete the exact stores without reopening
+    // the SDK. Never report success until the fresh document confirms deletion.
+    // If a journal could not be persisted, stay here with the in-memory scope.
+    try {
+      removeMatchingSession(pendingCleanup);
+    } catch {
+      // The durable cleanup branch takes priority over SESSION on startup and
+      // retries its removal along with every owned database.
+    }
+    tell('Removing this browser’s keys…');
+    location.reload();
+    return;
+  }
   await finishCleanup();
 }
 async function finishCleanup(): Promise<void> {
   try {
     if (!pendingCleanup) {
-      const raw = localStorage.getItem(CLEANUP);
-      if (!raw) return;
-      const value = JSON.parse(raw);
-      if (
-        !['baseUrl', 'userId', 'deviceId', 'message'].every(
-          (key) => typeof value?.[key] === 'string' && value[key],
-        )
-      )
-        throw new Error('Invalid local cleanup record');
-      pendingCleanup = value as CleanupScope;
+      const stored = storedCleanup();
+      if (!stored) return;
+      pendingCleanup = stored.scope;
+      pendingCleanupKey = stored.key;
     }
     const scope = pendingCleanup;
     // Try all independent removals, even if session storage has become blocked.
     const results = await Promise.allSettled([
       forgetDeviceCrypto(scope),
       BrowserOutbox.forgetSession(scope),
-      Promise.resolve().then(() => localStorage.removeItem(SESSION)),
+      Promise.resolve().then(() => removeMatchingSession(scope)),
     ]);
     if (results.some((result) => result.status === 'rejected'))
       throw new Error('Local cleanup remains incomplete');
-    localStorage.removeItem(CLEANUP);
+    if (pendingCleanupKey) localStorage.removeItem(pendingCleanupKey);
+    const tabJournal = sessionStorage.getItem(CLEANUP_TAB);
+    if (tabJournal && JSON.parse(tabJournal).key === pendingCleanupKey)
+      sessionStorage.removeItem(CLEANUP_TAB);
     pendingCleanup = undefined;
+    pendingCleanupKey = undefined;
     login();
     tell(scope.message);
   } catch {
@@ -1384,10 +1459,30 @@ window.addEventListener('pagehide', () => {
   identity?.close();
   outbox?.close();
 });
-const saved = sessionFromStorage();
-if (localStorage.getItem(CLEANUP)) void run(finishCleanup);
-else if (saved)
-  void run(async () => {
+void run(async () => {
+  let saved: Session | null;
+  try {
+    // Inspect the cleanup journal before touching any saved login. A blocked
+    // SESSION read must not prevent cleanup in this fresh document.
+    if (storedCleanup()) {
+      await finishCleanup();
+      return;
+    }
+    saved = sessionFromStorage();
+  } catch {
+    clear();
+    const c = card('Browser storage needs attention');
+    c.append(
+      el(
+        'p',
+        'This browser would not let us check its sign-in and key-removal records. We have not opened your account or confirmed that its local keys are removed. Allow storage for this app, then try again.',
+      ),
+      button('Try again', () => location.reload()),
+    );
+    app.append(c);
+    return;
+  }
+  if (saved) {
     try {
       await openSession(saved);
     } catch (error) {
@@ -1410,5 +1505,5 @@ else if (saved)
       );
       app.append(c);
     }
-  });
-else login();
+  } else login();
+});
