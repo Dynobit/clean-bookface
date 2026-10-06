@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: Version and setup
-      description: Which release are you using, and are you visiting someone else's site or hosting your own? Include your browser if relevant. Leave out private addresses.
+      description: Which release or commit are you using (v0.1/main or the privacy-next draft), and are you visiting someone else's site or hosting your own? Include your browser if relevant. Leave out private addresses.
       placeholder: 'For example: release version, self-hosted with Docker, Firefox on Android. Say unknown if you cannot find the version.'
     validations:
       required: true

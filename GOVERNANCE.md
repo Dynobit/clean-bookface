@@ -20,6 +20,12 @@ The source is MIT licensed. These commitments describe the official project's di
 
 Before that group exists, the repository owner remains responsible. An unfilled role is an unfilled role, not evidence that a community is maintaining the service.
 
+## Help maintain a part of the project
+
+Start with a bounded contribution through [Contributing](CONTRIBUTING.md) and the [community priorities](docs/BACKLOG.md#community-priorities). Documentation, accessibility, test maintenance, privacy review and host recovery all count as maintenance work. If you would like ongoing responsibility, open an issue describing the area you can maintain and your availability; do not post personal contact details or credentials. The owner and prospective maintainer should agree the scope before granting access.
+
+A proposed appointment should identify the chosen public handle, responsibility, review arrangements and how to step back. Begin with the permissions needed for that scope. Release, website and account administration are separate responsibilities; repository access alone does not authorize production operations. Publish appointments only after the person consents. Until then, this remains a call for contributors, not a completed community handover.
+
 ## Transfer the responsibilities, not just the repository
 
 Maintain a private handover checklist for the domain, DNS, repository, release permissions, project website, funding, security contact and recovery material. Record who renews each service and a backup contact. Keep personal billing details and recovery secrets out of source control.

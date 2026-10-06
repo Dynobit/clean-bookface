@@ -2,7 +2,15 @@
 
 The owner approved the v0.1 public preview of the source and project website on 5 October 2026. Public source availability and the project website are verified. This release offers no official hosting or public sign-up service and does not upgrade the operator-only pilot. Independent human security and accessibility review and the five-person usability study remain open; the requested exact Opus review was unavailable. The dated evidence below records its original scope, including earlier private checkpoints.
 
-## Publication readback, 5 October 2026
+## Current public status, 5 October 2026
+
+- The released application is [v0.1.0-preview.1](https://github.com/Dynobit/clean-bookface/releases/tag/v0.1.0-preview.1), at `2b9b110`. Its host can read stored data; it is not end-to-end encrypted.
+- The runner outage is resolved. [GitHub run 37371375764, attempt 2](https://github.com/Dynobit/clean-bookface/actions/runs/37371375764), passed for that exact released commit, including browser, container and provider checks. The original failed attempts remain in the historical record below.
+- The project website provides information, screenshots and links to the source. It has no member accounts or official hosting offer. Current website publishing uses Cloudflare Pages Direct Upload; see [publishing instructions](PROJECT_SITE.md).
+- The encrypted successor is separate [draft PR #4](https://github.com/Dynobit/clean-bookface/pull/4). At `a65eb75`, both GitHub jobs passed, alongside 65 client tests and focused local browser/recovery checks. Its known failures and unfinished product, migration, off-site recovery and human-review work prevent a production-ready claim. Consult that PR for current evidence; v0.1 qualification does not transfer to the successor.
+- Community work starts with [scoped priorities](BACKLOG.md#community-priorities) and [Contributing](../CONTRIBUTING.md). Publication is complete; community maintainer appointments and the independent human reviews are not.
+
+## Initial publication readback, 5 October 2026
 
 The public repository at `46838a8` has a clean two-commit history. Anonymous
 access returned HTTP 200; the preserved private development repository returned 404. Private development history and operational records remain outside the
@@ -16,7 +24,7 @@ infrastructure failure, not a passing public CI run. Private pre-release run
 to the public candidate, whose initial changes covered twelve documentation and
 website-copy files. This publication update changes only the release, backlog
 and website-publishing documentation. That earlier evidence does not claim a successful run on
-the public repository. A successful public CI run remains pending.
+the public repository. A successful public CI run was pending at this checkpoint; the later passing run is linked above.
 
 The project website is published through Cloudflare Pages Free from source
 `46838a8`. All seven assets at `https://cleanbookface.org` returned HTTP 200
@@ -465,7 +473,7 @@ general Fediverse compatibility or a permanent hosting offer.
 - Keep the account limit at 25 unless a larger workload and moderation capacity are separately qualified. No result here establishes 1,000-account capacity, measured ISP reliability or permanent managed-provider hosting.
 - Independent security review and accessibility review; five-person usability evaluation including people who do not operate servers.
 - Fresh-account qualification of managed-provider deployment and recovery. An owner-facing backup walkthrough, same-volume maintenance mode and deployment templates are now included; their existence does not prove a provider deployment.
-- Owner approval of the public source and website is recorded above. Public source visibility and private security reporting are verified. The static website, HTTPS and redirects are verified under the conditions above. A successful public CI run remains pending after the runner outage. Public issue intake is enabled. Maintain the documented contribution and stewardship arrangements; public release does not establish an independent review or a staffed maintenance team.
+- Owner approval of the public source and website is recorded above. Public source visibility and private security reporting are verified. The static website, HTTPS and redirects are verified under the conditions above. The released commit subsequently passed public CI after the runner outage; see the current status above. Public issue intake is enabled. Maintain the documented contribution and stewardship arrangements; public release does not establish an independent review or a staffed maintenance team.
 
 Do not import real personal histories into a live circle simply because a local test suite is green. Complete the relevant installation and restore checks, and make the administrator trust model clear to every member.
 

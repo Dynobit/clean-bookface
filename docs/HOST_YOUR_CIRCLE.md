@@ -22,11 +22,12 @@ This recipe assumes a dedicated server, with Docker running on that same server 
 
 ## 3. Run the short setup guide
 
-Until the repository is public, cloning requires authorized GitHub access. Use a reviewed release or commit when one is available.
+The repository is public; you do not need a GitHub account to download it. These commands use the released **v0.1.0-preview.1**. Read the [release status](RELEASE.md) before using personal archives.
 
 ```sh
 git clone https://github.com/Dynobit/clean-bookface.git
 cd clean-bookface
+git checkout v0.1.0-preview.1
 ./setup
 ```
 

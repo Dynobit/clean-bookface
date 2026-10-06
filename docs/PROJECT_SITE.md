@@ -11,12 +11,17 @@ GitHub links and separate joining and hosting instructions. Hosting providers ca
 The owner approved public source and website publication on 5 October 2026.
 The page uses v0.1 public-preview copy. Building it locally does not publish it,
 configure DNS or change repository visibility. Public source access is verified.
-Cloudflare Pages Free serves the seven reviewed assets from `46838a8`; all
-returned HTTP 200 and matched their approved hashes. Both `.org` custom domains
+The initial Cloudflare Pages Free publication served seven reviewed assets from
+`46838a8`; all returned HTTP 200 and matched their approved hashes. Both `.org` custom domains
 are active over HTTPS, and all four `.com` entrypoints preserve paths and queries
 in 301 redirects. Delivered HTML contains no scripts after explicitly disabling
 zone RUM. See [Release status](RELEASE.md) for browser-check scope. Publication
 does not open pilot invitations or promise an official member-hosting service.
+
+The current page keeps the v0.1 screenshots and includes a community starting
+point, a link to the separate encrypted draft and share-preview metadata using
+the existing fictional cover image. Keep its release distinction and the
+README's distinction in sync: the encrypted draft is not a released upgrade.
 
 ## Preview locally
 
