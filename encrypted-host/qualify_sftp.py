@@ -21,6 +21,13 @@ import recovery
 DEBIAN='sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'
 
 
+def host_key_refused(result):
+    # Restic can close the subprocess stderr pipe after SSH exits, before its
+    # final diagnostic line is drained. Both messages identify strict key refusal.
+    return result.returncode != 0 and any(message in result.stderr for message in (
+        'Host key verification failed', 'REMOTE HOST IDENTIFICATION HAS CHANGED!'))
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--runtime',type=pathlib.Path,required=True)
@@ -79,7 +86,7 @@ def main():
         correct=(ssh/'known_hosts').read_text()
         host.write(ssh/'known_hosts',f'[{ip}]:2222 '+(root/'wrong.pub').read_text())
         failed,_=recover('init-repository',expect_success=False)
-        check(failed.returncode!=0 and 'Host key verification failed' in failed.stderr,'strict incorrect SSH host key rejected')
+        check(host_key_refused(failed),'strict incorrect SSH host key rejected')
         host.write(ssh/'known_hosts',correct)
         recover('init-repository');check(True,'actual SFTP restic repository initialized')
         _,elapsed=recover('backup');proof['routineBackupSeconds']=round(elapsed,2)

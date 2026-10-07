@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "ownership": "project-derived-not-official",
+  "platform": "linux/arm64",
+  "base": "restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510",
+  "source": {
+    "version": "0.19.1",
+    "commit": "6aa3a516ce654808a1f28f9fa21e9b7c8e6e90bf",
+    "url": "https://codeload.github.com/restic/restic/tar.gz/refs/tags/v0.19.1",
+    "filename": "restic-v0.19.1.tar.gz",
+    "sha256": "bb9b1a19040744d26d8a79be029d4e6b189c45ccc9d8831d7fe367d3c33df725",
+    "signedTagObject": "6099d4b5c4376368d42b9982c7d3e93ba13d83b1"
+  },
+  "toolchain": {
+    "version": "go1.26.8",
+    "url": "https://go.dev/dl/go1.26.8.linux-arm64.tar.gz",
+    "filename": "go1.26.8.linux-arm64.tar.gz",
+    "sha256": "211ffced9dcb9633a55eac6364816ec0ddd951389a740e88fa8b3337971bdda0"
+  },
+  "modules": {
+    "go.mod": "3bbd9a6cb1ed683b43742d9d4d9a6821a9f62eeb90c6eeb638230076d3b8c12e",
+    "go.sum": "5bda466097068a3ad81fbd58f60bdd788fe73e6efdf07ed8e702db6c7332e20d"
+  },
+  "vendorTreeSha256": "94f9093e01b41e7df08cb1763a2a74f774fc2620fa014d986061ea586890afbe",
+  "version": "0.19.1",
+  "securityUpdates": {
+    "google.golang.org/grpc": "v1.83.2",
+    "golang.org/x/text": "v0.41.0",
+    "go.opentelemetry.io/otel/sdk": "v1.45.0"
+  }
+}

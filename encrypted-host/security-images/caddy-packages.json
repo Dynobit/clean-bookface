@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "ownership": "project-derived-not-official",
+  "platform": "linux/arm64",
+  "base": "caddy:2.11.7-alpine@sha256:84058f1a0e5beb97664a9b79dcfd267b594c033d5bb88d8463cdfb59c0779197",
+  "packageOrigin": "https://dl-cdn.alpinelinux.org/alpine/v3.23/main/aarch64",
+  "packages": [
+    {
+      "package": "libcrypto3",
+      "version": "3.5.9-r0",
+      "sha256": "3b0bd7aaac36d49216f47d025f303dafb6da8d05bd258f71900d3b6156d36012"
+    },
+    {
+      "package": "libssl3",
+      "version": "3.5.9-r0",
+      "sha256": "cdb3762116994f767cd1da423fa8004bd36b2e3802e3a1343786a40f00a5030e"
+    },
+    {
+      "package": "zlib",
+      "version": "1.3.2-r1",
+      "sha256": "82d52fa82a46c73aae8b9f95d7f31a196137f3ce4a000980cdbbfc05c245e7bf"
+    }
+  ]
+}

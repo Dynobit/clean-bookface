@@ -1,6 +1,6 @@
 # Clean Bookface implementation backlog
 
-Implementation and acceptance ledger, updated 2026-10-06. The v0.1 evidence below is historical. The v0.1 public-preview application implements the archive, same-host circle and constrained cross-server sharing. The original acceptance criteria remain below; implemented code and automated evidence are distinguished from unfinished release qualification. People control their own feed and interface; the product does not optimize their behavior for engagement.
+Implementation and acceptance ledger, updated 2026-10-07. The v0.1 evidence below is historical. The v0.1 public-preview application implements the archive, same-host circle and constrained cross-server sharing. The original acceptance criteria remain below; implemented code and automated evidence are distinguished from unfinished release qualification. People control their own feed and interface; the product does not optimize their behavior for engagement.
 
 The separately delivered [encrypted browser successor](ENCRYPTION.md) is a separate preview. The v0.1 milestones below do not establish feature parity or release acceptance for that new architecture. Its [qualification record](../encrypted-client/QUALIFICATION.md) records tested recovery, sharing, migration, moderation, account closure, import behavior and completed public-route qualification separately from remaining human reviews.
 
@@ -16,7 +16,7 @@ Current evidence is executable in the archive, core, HTTP, federation, portabili
 
 ## Current review follow-up
 
-The requested Opus 5.5 reviews are now complete. [The review record](REVIEW_2026_10.md) describes the implemented fixes and remaining acceptance work. The earlier unavailable-model statements below describe their dated checkpoints. Current priorities are resolving the exact host-image advisories without weakening checks, independent human security/accessibility review, the five-person usability study, and qualification of additional hosting environments. The active source changes must pass their own browser and release checks before replacing the published baseline.
+The requested Opus 5.5 reviews are now complete. [The review record](REVIEW_2026_10.md) describes the implemented fixes and remaining acceptance work. The earlier unavailable-model statements below describe their dated checkpoints. Current priorities are resolving the exact host-image advisories without weakening checks, independent human security/accessibility review, the five-person usability study, and qualification of additional hosting environments. The reviewed application fixes are published in [v0.2.0-preview.2](RELEASE.md#published-review-hardening-6-october-2026), with public functionality and CI evidence. Optional [hosting image builders](../encrypted-host/security-images/README.md) now cover supported library and compiler updates; their guides record actual tests and remaining advisories. These derivatives have not replaced the default or deployed images.
 
 ## Community priorities
 
