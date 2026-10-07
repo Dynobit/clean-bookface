@@ -47,7 +47,10 @@ class ParentAndExpiryTests(unittest.TestCase):
     def exercise(self, stale_parent=False):
         import subprocess
         with tempfile.TemporaryDirectory() as directory:
-            root=pathlib.Path(directory);source=root/'source';recipes=source/'security-images';recipes.mkdir(parents=True)
+            root=pathlib.Path(directory).resolve()
+            source=root/'checkout'/'encrypted-host'
+            recipes=source/'security-images';recipes.mkdir(parents=True)
+            receipts=root/'receipts';receipts.mkdir()
             inputs=root/'inputs';inputs.mkdir()
             wheels={'packages':[{'package':'cryptography','version':'50.0.2'}],'base':'official/source:1@sha256:'+'a'*64}
             wheel_bytes=json.dumps(wheels).encode();(recipes/'synapse-wheels.json').write_bytes(wheel_bytes)
@@ -58,7 +61,7 @@ class ParentAndExpiryTests(unittest.TestCase):
             (recipes/'synapse-debian.json').write_text(json.dumps(lock))
             (recipes/'synapse-debian.Dockerfile').write_text('ARG BASE\nFROM ${BASE}\nRUN apt-get update && apt-get install example=2\n')
             parent={'ownership':'project-derived-not-official','platform':'linux/arm64','packages':wheels['packages'],'officialSourceReference':wheels['base'],'manifestSha256':hashlib.sha256(wheel_bytes).hexdigest(),'imageId':'sha256:'+'b'*64,'tag':'clean-bookface-synapse-security:test','identity':{'unchanged':True}}
-            (root/'parent.json').write_text(json.dumps(parent))
+            (receipts/'parent.json').write_text(json.dumps(parent))
             image_id='sha256:'+'d'*64
             def docker(*args):
                 if args[:2]==('image','inspect'):return json.dumps([{'Architecture':'arm64','Os':'linux','Config':{},'Id':args[2]}])
@@ -77,13 +80,13 @@ class ParentAndExpiryTests(unittest.TestCase):
             with patch.object(builder,'ROOT',source),patch.object(builder,'run',side_effect=docker),patch.object(builder,'identity',return_value=parent['identity']),patch.object(builder,'python_versions',return_value={'cryptography':'46.0.7' if stale_parent else '50.0.2'}),patch.object(builder.subprocess,'run',side_effect=warm_cached_build) as build:
                 if stale_parent:
                     with self.assertRaisesRegex(ValueError,'Parent installed Python packages'):
-                        builder.build(inputs,root/'parent.json',root/'result.json','clean-bookface-synapse-debian-security:test')
+                        builder.build(inputs,receipts/'parent.json',receipts/'result.json','clean-bookface-synapse-debian-security:test')
                     build.assert_not_called()
                 else:
                     with self.assertRaises(subprocess.CalledProcessError):
-                        builder.build(inputs,root/'parent.json',root/'result.json','clean-bookface-synapse-debian-security:test')
+                        builder.build(inputs,receipts/'parent.json',receipts/'result.json','clean-bookface-synapse-debian-security:test')
                     self.assertEqual(validation,['expired signed metadata rejected'])
-                self.assertFalse((root/'result.json').exists())
+                self.assertFalse((receipts/'result.json').exists())
     def test_warm_cache_cannot_admit_expired_metadata(self):self.exercise()
     def test_matching_identity_with_stale_python_packages_refused(self):self.exercise(stale_parent=True)
 
