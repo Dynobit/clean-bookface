@@ -466,4 +466,6 @@ footer a {
   margin: auto;
 }
 /* Author button display rules must not override the native hidden state. */
-[hidden]{display:none!important}
+[hidden] {
+  display: none !important;
+}

@@ -13,7 +13,9 @@ async function zip(entries: Array<[string, string | Blob]>) {
 test('sample search, photo, filters, keyboard, mobile and lifecycle clearing', async ({ page }) => {
   await page.goto('/book.html');
   await expect(page.locator('#count')).toHaveText('6 of 6 memories');
-  await expect(page.getByRole('button', { name: 'Cancel opening', includeHidden: true })).toBeHidden();
+  await expect(
+    page.getByRole('button', { name: 'Cancel opening', includeHidden: true }),
+  ).toBeHidden();
   await expect(page.locator('.memory-photo')).toBeVisible();
   await expect
     .poll(() =>
@@ -74,7 +76,9 @@ test('multipart malicious text stays inert, warnings, no network/storage, portab
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/book.html');
   await expect(page.locator('#count')).toHaveText('6 of 6 memories');
-  await expect(page.getByRole('button', { name: 'Cancel opening', includeHidden: true })).toBeHidden();
+  await expect(
+    page.getByRole('button', { name: 'Cancel opening', includeHidden: true }),
+  ).toBeHidden();
   const requests: string[] = [];
   page.on('request', (r) => {
     if (!r.url().startsWith('blob:') && !r.url().startsWith('data:')) requests.push(r.url());
@@ -196,5 +200,7 @@ test('legacy ZIP imports privately; real navigation/back and reload discard coll
   await page.reload();
   await expect(page.locator('#mode')).toContainText('THE SAMPLE BOOK');
   await expect(page.locator('#count')).toHaveText('6 of 6 memories');
-  await expect(page.getByRole('button', { name: 'Cancel opening', includeHidden: true })).toBeHidden();
+  await expect(
+    page.getByRole('button', { name: 'Cancel opening', includeHidden: true }),
+  ).toBeHidden();
 });
