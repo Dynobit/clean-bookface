@@ -27,11 +27,11 @@
     "test:provider": "node scripts/provider-smoke.mjs"
   },
   "dependencies": {
-    "@fedify/fedify": "2.4.0",
+    "@fedify/fedify": "2.4.1",
     "@hono/node-server": "2.1.3",
     "@node-rs/argon2": "2.2.1",
     "busboy": "1.6.0",
-    "hono": "4.13.12",
+    "hono": "4.13.13",
     "ipaddr.js": "2.5.0",
     "sharp": "0.35.5",
     "yauzl": "3.4.0",
@@ -40,7 +40,7 @@
   "devDependencies": {
     "@playwright/test": "1.63.0",
     "@types/busboy": "1.5.4",
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.1",
     "@types/yauzl": "3.4.0",
     "@types/yazl": "3.3.1",
     "prettier": "3.9.9",
