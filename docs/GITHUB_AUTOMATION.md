@@ -39,15 +39,25 @@ classified as strings; patches, issue bodies and titles are not copied to output
 Job summaries contain counts and fixed-host numbered links only. There are no
 public comments, automated closures, stale bots or outreach.
 
-The token has only contents read, issues write, pull requests read and actions
-read. API mutations are restricted to creating the owned labels, adding them to
-issues/PRs and deleting individually owned labels. The helper cannot update code,
-approve reviews, merge, deploy, or write arbitrary API routes. Human labels are
-never replaced wholesale. Redirects are rejected. Failures expose only fixed diagnostic codes, fixed API operation categories and
-request/write attempt counts; HTTP failures include only the numeric status.
-Fetch, headers, response reader, body reads and JSON decoding have distinct codes.
-Unknown exceptions remain generic. Errors do not echo exception messages, response
-bodies, contribution text or tokens.
+The token has contents read, issues write, pull requests write and actions read.
+GitHub requires pull requests write to label PRs; issues write permits creating
+repository labels and labeling issues. This matches the first-party
+[actions/labeler recommended permissions](https://github.com/actions/labeler#recommended-permissions).
+Pull requests write is broader than labeling at the credential level. The trusted
+helper enforces the narrower API boundary: its only mutations create owned labels,
+add them to issues/PRs and delete individually owned labels. It has no routes for
+reviews, PR edits, approval, merge, deployment or code changes. The repository's
+`can_approve_pull_request_reviews=false` setting separately disallows Actions review
+approval; contents read does not grant the contents write permission needed to
+merge. These controls have different roles: the token permits PR metadata writes,
+while reviewed helper code limits this workflow to label operations.
+
+Human labels are never replaced wholesale. Redirects are rejected. Failures expose
+only fixed diagnostic codes, fixed API operation categories and request/write
+attempt counts; HTTP failures include only the numeric status. Fetch, headers,
+response reader, body reads and JSON decoding have distinct codes. Unknown
+exceptions remain generic. Errors do not echo exception messages, response bodies,
+contribution text or tokens.
 
 Each run allows at most 240 API requests and 80 write attempts, two pages of 100
 items per inventory, 2 MB per response, ten seconds per request and three minutes
@@ -92,5 +102,21 @@ Local acceptance: `npx --no-install tsx --test tests/github-maintenance.test.ts`
 The mocked API tests cover inert contributor metadata, idempotency, human label
 preservation, incomplete/failing CI, revision movement, pagination, response and
 write bounds, fair rotation across fifty PRs, visible inventory truncation,
-cancellation and repository restriction. These tests do not claim
-that the workflow has run on GitHub before deployment to main.
+cancellation and repository restriction. Fourteen mocked tests pass, including
+safe classification of hostile API failures; mocks alone do not qualify GitHub
+token permissions.
+
+On 8 October 2026, the initial live run failed with a generic error. After adding
+safe diagnostics, an issue-only batch succeeded in
+[run 37762841492](https://github.com/Dynobit/clean-bookface/actions/runs/37762841492),
+but that batch did not exercise PR labels. A controlled direct PR check then
+reported `github_status_403 (issue_labels_add; requests=9; writes=1)` in
+[run 37763023256](https://github.com/Dynobit/clean-bookface/actions/runs/37763023256).
+With the same pinned helper and only pull requests permission changed from read
+to write, [run 37763219173](https://github.com/Dynobit/clean-bookface/actions/runs/37763219173)
+successfully inspected and labeled PRs #21 and #22, one write each. An unchanged
+repeat in [run 37763476243](https://github.com/Dynobit/clean-bookface/actions/runs/37763476243)
+inspected each PR again with zero writes, demonstrating live idempotency for those
+inputs. This qualifies
+the permission correction for PR labeling; it does not claim approval, merging,
+deployment or complete future queue coverage.

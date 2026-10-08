@@ -13,7 +13,8 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  # GitHub requires PR write permission to label pull requests.
+  pull-requests: write
   actions: read
 concurrency:
   group: contribution-intake
