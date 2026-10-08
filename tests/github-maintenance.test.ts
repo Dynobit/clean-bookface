@@ -5,6 +5,7 @@ import {
   LIMITS,
   REPOSITORY,
   runMaintenance,
+  safeFailure,
   summary,
 } from '../scripts/github-maintenance.mjs';
 const head = 'a'.repeat(40),
@@ -356,4 +357,63 @@ test('large direct-event reconciliation stops before budget exhaustion with visi
   assert.ok(result.writes <= LIMITS.writes);
   assert.equal(result.inspected + result.deferred, result.inventory);
   assert.match(summary(result), /Budget deferred: true/);
+});
+
+test('public failure diagnostics classify API failures without echoing hostile exceptions or bodies', async () => {
+  const hostile = 'synthetic-secret $(echo unsafe) <script>private body</script>';
+  const cases = [
+    { fetchImpl: async () => new Response(hostile, { status: 403 }), code: 'github_status_403' },
+    {
+      fetchImpl: async () => {
+        throw new Error(hostile);
+      },
+      code: 'fetch_failed',
+    },
+    {
+      fetchImpl: async () => ({
+        ok: true,
+        headers: {
+          get() {
+            throw new Error(hostile);
+          },
+        },
+      }),
+      code: 'response_headers_failed',
+    },
+    {
+      fetchImpl: async () => ({
+        ok: true,
+        headers: new Headers(),
+        get body() {
+          throw new Error(hostile);
+        },
+      }),
+      code: 'response_reader_failed',
+    },
+    {
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error(hostile));
+            },
+          }),
+        ),
+      code: 'response_read_failed',
+    },
+    { fetchImpl: async () => new Response(hostile), code: 'invalid_response_json' },
+  ];
+  for (const item of cases) {
+    await assert.rejects(
+      runMaintenance({ repository: REPOSITORY, token: 'synthetic', fetchImpl: item.fetchImpl }),
+      (error: unknown) => {
+        const message = safeFailure(error);
+        assert.equal(message, `${item.code} (label_inventory; requests=1; writes=0)`);
+        assert.ok(!message.includes(hostile));
+        return true;
+      },
+    );
+  }
+  assert.equal(safeFailure(new Error(hostile)), 'internal_error (metadata)');
+  assert.equal(safeFailure(new Error('github_status_403')), 'internal_error (metadata)');
 });

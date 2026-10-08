@@ -27,9 +27,77 @@ export const LABELS = Object.freeze({
   'automation:area-docs': 'Documentation changes.',
   'automation:area-tooling': 'Workflow, test, script or other repository changes.',
 });
-const fail = (code) => {
-  throw new Error(code);
+const ERROR_CODES = new Set([
+  'unauthorized_repository',
+  'missing_token',
+  'unsupported_event',
+  'forbidden_route',
+  'request_limit',
+  'write_limit',
+  'response_limit',
+  'invalid_page',
+  'label_inventory_incomplete',
+  'invalid_run_targets',
+  'invalid_clock',
+  'invalid_runs',
+  'invalid_number',
+  'invalid_revision',
+  'invalid_filename',
+  'event_limit',
+  'fetch_failed',
+  'response_read_failed',
+  'response_headers_failed',
+  'response_reader_failed',
+  'invalid_response_json',
+]);
+const OPERATIONS = new Set([
+  'metadata',
+  'label_inventory',
+  'label_create',
+  'contribution_inventory',
+  'issue_read',
+  'issue_labels_add',
+  'issue_label_delete',
+  'pull_read',
+  'pull_files',
+  'verify_workflow',
+  'verify_runs',
+  'verify_jobs',
+]);
+class MaintenanceError extends Error {
+  constructor(code, operation = 'metadata') {
+    super(code);
+    this.operation = operation;
+  }
+}
+const fail = (code, operation) => {
+  throw new MaintenanceError(code, operation);
 };
+// Only branded failures and fixed classifications may reach public logs. An API
+// body or arbitrary exception message can never supply a diagnostic string.
+export function safeFailure(error) {
+  if (!(error instanceof MaintenanceError)) return 'internal_error (metadata)';
+  const code =
+    ERROR_CODES.has(error.message) || /^github_status_[1-5]\d{2}$/.test(error.message)
+      ? error.message
+      : 'internal_error';
+  const operation = OPERATIONS.has(error.operation) ? error.operation : 'metadata';
+  const count = (value, maximum) =>
+    Number.isSafeInteger(value) && value >= 0 && value <= maximum + 1 ? value : 'unknown';
+  return `${code} (${operation}; requests=${count(error.requests, LIMITS.requests)}; writes=${count(error.writes, LIMITS.writes)})`;
+}
+function operationFor(route, method) {
+  if (route === 'labels' && method === 'POST') return 'label_create';
+  if (route.startsWith('labels?')) return 'label_inventory';
+  if (route.startsWith('issues?')) return 'contribution_inventory';
+  if (method === 'POST') return 'issue_labels_add';
+  if (method === 'DELETE') return 'issue_label_delete';
+  if (route.startsWith('issues/')) return 'issue_read';
+  if (route.startsWith('pulls/')) return route.includes('/files') ? 'pull_files' : 'pull_read';
+  if (route.startsWith('actions/runs/')) return 'verify_jobs';
+  if (route.includes('/runs?')) return 'verify_runs';
+  return 'verify_workflow';
+}
 const number = (n) => (Number.isSafeInteger(n) && n > 0 ? n : fail('invalid_number'));
 const sha = (s) =>
   typeof s === 'string' && /^[a-f0-9]{40}$/.test(s) ? s : fail('invalid_revision');
@@ -48,15 +116,30 @@ function area(path) {
   return 'automation:area-tooling';
 }
 
-export async function runMaintenance({
-  repository,
-  token,
-  event = {},
-  eventName = 'schedule',
-  fetchImpl = fetch,
-  signal,
-  now = Date.now,
-}) {
+export async function runMaintenance(options) {
+  const context = {};
+  try {
+    return await reconcile(options, context);
+  } catch (error) {
+    if (error instanceof MaintenanceError && context.result) {
+      error.requests = context.result.requests;
+      error.writes = context.result.writes;
+    }
+    throw error;
+  }
+}
+async function reconcile(
+  {
+    repository,
+    token,
+    event = {},
+    eventName = 'schedule',
+    fetchImpl = fetch,
+    signal,
+    now = Date.now,
+  },
+  context,
+) {
   if (repository !== REPOSITORY) fail('unauthorized_repository');
   if (!token) fail('missing_token');
   if (
@@ -83,6 +166,7 @@ export async function runMaintenance({
     rotationBatches: 1,
     budgetDeferred: false,
   };
+  context.result = result;
   async function api(route, method = 'GET', body) {
     combined.throwIfAborted();
     const getRoute =
@@ -95,39 +179,68 @@ export async function runMaintenance({
       fail('forbidden_route');
     if (++result.requests > LIMITS.requests) fail('request_limit');
     if (method !== 'GET' && ++result.writes > LIMITS.writes) fail('write_limit');
-    const response = await fetchImpl(`https://api.github.com/repos/${REPOSITORY}/${route}`, {
-      method,
-      redirect: 'error',
-      signal: AbortSignal.any([combined, AbortSignal.timeout(LIMITS.requestMs)]),
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'content-type': 'application/json',
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    if (!response.ok) fail(`github_status_${response.status}`);
-    if (Number(response.headers.get('content-length')) > LIMITS.responseBytes)
-      fail('response_limit');
-    const reader = response.body?.getReader();
+    const operation = operationFor(route, method);
+    let response;
+    try {
+      response = await fetchImpl(`https://api.github.com/repos/${REPOSITORY}/${route}`, {
+        method,
+        redirect: 'error',
+        signal: AbortSignal.any([combined, AbortSignal.timeout(LIMITS.requestMs)]),
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'content-type': 'application/json',
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+    } catch {
+      fail('fetch_failed', operation);
+    }
+    try {
+      if (!response.ok) fail(`github_status_${response.status}`, operation);
+      if (Number(response.headers.get('content-length')) > LIMITS.responseBytes)
+        fail('response_limit', operation);
+    } catch (error) {
+      if (error instanceof MaintenanceError) throw error;
+      fail('response_headers_failed', operation);
+    }
+    let reader;
+    try {
+      reader = response.body?.getReader();
+    } catch {
+      fail('response_reader_failed', operation);
+    }
     let size = 0;
     const chunks = [];
     if (reader) {
+      let readFailed = false;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           size += value.byteLength;
-          if (size > LIMITS.responseBytes) fail('response_limit');
+          if (size > LIMITS.responseBytes) fail('response_limit', operation);
           chunks.push(Buffer.from(value));
         }
+      } catch (error) {
+        readFailed = true;
+        if (error instanceof MaintenanceError) throw error;
+        fail('response_read_failed', operation);
       } finally {
-        await reader.cancel();
+        try {
+          await reader.cancel();
+        } catch {
+          if (!readFailed) fail('response_reader_failed', operation);
+        }
       }
     }
     const text = Buffer.concat(chunks).toString('utf8');
-    return text ? JSON.parse(text) : null;
+    try {
+      return text ? JSON.parse(text) : null;
+    } catch {
+      fail('invalid_response_json', operation);
+    }
   }
   async function pages(route, key) {
     const items = [];
@@ -341,9 +454,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     });
     if (process.env.GITHUB_STEP_SUMMARY)
       await appendFile(process.env.GITHUB_STEP_SUMMARY, summary(result));
-  } catch {
+  } catch (error) {
     // Never echo API bodies, contributor text or tokens, including exception messages.
-    console.error('Contribution intake stopped; bounded metadata reconciliation did not complete.');
+    console.error(`Contribution intake stopped: ${safeFailure(error)}; reconciliation incomplete.`);
     process.exitCode = 1;
   }
 }

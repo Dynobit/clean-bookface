@@ -43,7 +43,10 @@ The token has only contents read, issues write, pull requests read and actions
 read. API mutations are restricted to creating the owned labels, adding them to
 issues/PRs and deleting individually owned labels. The helper cannot update code,
 approve reviews, merge, deploy, or write arbitrary API routes. Human labels are
-never replaced wholesale. Redirects are rejected. Errors do not echo response
+never replaced wholesale. Redirects are rejected. Failures expose only fixed diagnostic codes, fixed API operation categories and
+request/write attempt counts; HTTP failures include only the numeric status.
+Fetch, headers, response reader, body reads and JSON decoding have distinct codes.
+Unknown exceptions remain generic. Errors do not echo exception messages, response
 bodies, contribution text or tokens.
 
 Each run allows at most 240 API requests and 80 write attempts, two pages of 100
