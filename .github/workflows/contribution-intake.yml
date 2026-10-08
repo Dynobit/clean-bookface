@@ -1,0 +1,40 @@
+name: Contribution intake
+on:
+  issues:
+    types: [opened, reopened]
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  workflow_run:
+    workflows: [Verify the circle]
+    types: [completed]
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: contribution-intake
+  cancel-in-progress: false
+jobs:
+  intake:
+    if: github.repository == 'Dynobit/clean-bookface'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Always trusted main, including pull_request_target and workflow_run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+          sparse-checkout: scripts/github-maintenance.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Reconcile advisory contribution labels
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/github-maintenance.mjs

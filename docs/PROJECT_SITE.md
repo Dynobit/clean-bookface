@@ -78,16 +78,17 @@ publish the website.
    injected analytics or tracking scripts.
    A successful upload or local preview alone is not this proof.
 
-## Optional GitHub Pages alternative
+## One production publisher
 
-The retained **Publish project website after approval** workflow is an opt-in
-alternative, not the production publisher. The workflow is disabled and the
-unused GitHub Pages site has been removed. Keep it disabled while Cloudflare
-serves the project. Before enabling it, review its repository guard and exact
-source, configure GitHub Pages and domain ownership, and coordinate the DNS
-migration with HTTPS and redirect readbacks. Do not enable competing publishers
-for the same canonical domain. Its manual deployment uses GitHub's Pages
-permissions; Cloudflare credentials do not belong in that workflow.
+Cloudflare Pages serves the website. The unused GitHub Pages workflow was
+removed to avoid maintaining a second deployment route and receiving updates
+for actions the project does not use. GitHub Pages remains disabled.
+
+A future hosting migration needs its own reviewed configuration, domain and
+HTTPS checks, and rollback plan. Do not enable competing publishers for the
+same canonical domain. The [GitHub maintenance automation](GITHUB_AUTOMATION.md)
+handles contribution intake; it does not possess Cloudflare credentials or
+publish changes to the live website.
 
 ## Community upkeep
 

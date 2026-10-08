@@ -5,16 +5,37 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: '@types/node'
+        versions: ['>=25.0.0']
+    groups:
+      npm-compatible:
+        update-types: [minor, patch]
   - package-ecosystem: npm
     directory: /encrypted-client
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: '@types/node'
+        versions: ['>=25.0.0']
+    groups:
+      npm-compatible:
+        update-types: [minor, patch]
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: node
+        versions: ['>=25.0.0']
+    groups:
+      docker-compatible:
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    groups:
+      actions-compatible:
+        update-types: [minor, patch]

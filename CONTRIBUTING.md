@@ -40,6 +40,8 @@ Review the whole diff, including deleted lines, for personal information before 
 
 Independent maintainers can build and host this source under the MIT license. Review dependency licenses before redistributing a bundled image. The project is unaffiliated with Meta or Facebook.
 
-Maintainers can use the [private daily review workflow](docs/CONTRIBUTION_REVIEW.md) to keep up with new pull requests. It reviews changed commits and keeps its advice in a private dashboard. People still make the decisions; it cannot approve or merge a contribution.
+The [GitHub maintenance workflow](docs/GITHUB_AUTOMATION.md) sorts incoming requests and reports checks automatically. It preserves contributors' issues and maintainers' labels; it does not close work because it has been quiet. Maintainers can use GitHub auto-merge to finish an approved change when the required checks pass.
+
+The separate [private daily review workflow](docs/CONTRIBUTION_REVIEW.md) reviews changed commits and keeps its advice in a private dashboard. Its findings do not count as an approving GitHub review. People still make the decisions; the reviewer cannot approve or merge a contribution.
 
 Pull-request diffs may be sent to a third-party model provider for that advisory review. Keep personal data and secrets out of contributions, including deleted lines in a diff. Report vulnerabilities through [the private security route](SECURITY.md).
