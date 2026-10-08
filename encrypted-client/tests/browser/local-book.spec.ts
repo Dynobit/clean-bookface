@@ -13,6 +13,28 @@ async function zip(entries: Array<[string, string | Blob]>) {
 test('sample search, photo, filters, keyboard, mobile and lifecycle clearing', async ({ page }) => {
   await page.goto('/book.html');
   await expect(page.locator('#count')).toHaveText('6 of 6 memories');
+  // Reach the native file input through keyboard navigation, not a scripted focus.
+  for (let step = 0; step < 15; step++) {
+    await page.keyboard.press('Tab');
+    if (await page.locator('#files').evaluate((input) => input === document.activeElement)) break;
+  }
+  await expect(page.locator('#files')).toBeFocused();
+  expect(await page.locator('#files').evaluate((input) => input.matches(':focus-visible'))).toBe(
+    true,
+  );
+  await expect(page.locator('label[for="files"]')).toHaveCSS('outline-style', 'solid');
+  await expect(page.locator('label[for="files"]')).toHaveCSS('outline-width', '3px');
+  await expect(page.locator('label[for="files"]')).toHaveCSS('outline-color', 'rgb(213, 135, 40)');
+  const chooserOpened = page.waitForEvent('filechooser');
+  await page.keyboard.press('Enter');
+  const chooser = await chooserOpened;
+  expect(chooser.isMultiple()).toBe(true);
+  await chooser.setFiles([]);
+  await expect(page.locator('#files')).toHaveValue('');
+  await expect(page.locator('#mode')).toContainText('THE SAMPLE BOOK');
+  await expect(page.locator('#count')).toHaveText('6 of 6 memories');
+  await expect(page.locator('#status')).toBeEmpty();
+
   await expect(
     page.getByRole('button', { name: 'Cancel opening', includeHidden: true }),
   ).toBeHidden();

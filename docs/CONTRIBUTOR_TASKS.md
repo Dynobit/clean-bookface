@@ -6,11 +6,15 @@ Use fictional data only. Never post personal archives, real-account screenshots,
 
 ## Review the sample book with keyboard and a screen reader
 
+[Coordinate in issue #15](https://github.com/Dynobit/clean-bookface/issues/15).
+
 **Task:** Follow the README's sample-book entry point using only a keyboard, then one screen reader you already use. Open the fictional sample, move among its available views, and reach local-import controls without selecting personal files. No server setup is required for the published sample.
 
 **Acceptance:** Report browser, OS and assistive-tool versions; the tested build; steps attempted; visible focus, control names and reading order; and any trapped or unreachable control. Distinguish keyboard-only results from screen-reader results. A keyboard-only contribution is welcome, but leave the screen-reader portion explicitly unverified. File one reproducible issue per finding, or record the exact journey that passed. Use only fictional screenshots and sanitized notes. This is a bounded review, not an accessibility certification.
 
 ## Check local import in one browser using a fictional archive
+
+[Coordinate in issue #16](https://github.com/Dynobit/clean-bookface/issues/16).
 
 **Task:** In one installed browser, open the fictional sample linked from the README. Choose **Export book**, then **Clear book**, then **Open my archive** and select the downloaded `clean-bookface-book.zip`. This gives you a made-up archive without needing a terminal or a personal Facebook download. The reader accepts ZIP files only; do not select a folder or loose JSON files.
 
@@ -18,17 +22,23 @@ Use fictional data only. Never post personal archives, real-account screenshots,
 
 ## Report one confusing step in the sample-book first visit
 
+[Coordinate in issue #17](https://github.com/Dynobit/clean-bookface/issues/17).
+
 **Task:** As a first-time reader, follow the README into the fictional sample without extra explanation. Find one memory, find the local-import option without choosing private files, and explain in your own words what is local and what would require a circle. No coding or server setup is needed.
 
 **Acceptance:** Provide the tested build, steps completed unaided, any help needed, and one confusing label or instruction with a proposed wording change (or state no confusion in the tested steps). Use only your own voluntary observations and fictional content; do not recruit or name other people for this task. Do not claim a participant study or universal usability from this one check.
 
 ## Add a synthetic unsupported archive-layout regression fixture
 
+[Coordinate in issue #18](https://github.com/Dynobit/clean-bookface/issues/18).
+
 **Task:** Read `encrypted-client/tests/import-shapes.test.ts` and the import report behavior. Construct one tiny, previously uncovered unsupported JSON layout with made-up records. Add a behavioral test showing how the importer reports that case; keep unsupported input visible rather than silently dropping it. Discuss intended behavior in the issue before expanding parser support.
 
 **Acceptance:** The fixture is written from scratch, contains no copied personal export data, and documents the unsupported shape and expected report outcome. The test exercises the importer and checks its observable report, not source strings. Record the exact command and result for the focused test plus the client checks required by [Contributing](../CONTRIBUTING.md). Preserve existing privacy and record-reconciliation requirements. This task does not require broad new format support.
 
 ## Verify the disposable local host recovery guide
+
+[Coordinate in issue #19](https://github.com/Dynobit/clean-bookface/issues/19).
 
 **Task:** On an isolated disposable host you control, follow [host operations](../encrypted-host/OPERATIONS.md#encrypted-backups-and-standby-drill) for one backup and local restore using fictional accounts and content. Read the documented prerequisites first; the pinned ARM64 recipe is not an x86 qualification. Never use an existing circle, production runtime or real backup.
 

@@ -22,3 +22,18 @@ These are invitations to contribute, not appointments or claims that anyone has 
 | Tests and imports           | Add a tiny synthetic archive fixture and a behavioral regression check.  | Review import reports, browser compatibility and fixture coverage. |
 
 A chosen public handle is welcome in either area. Start with a bounded contribution; discuss scope and consent before any appointment or access grant. There is no promised schedule, review turnaround or obligation to keep volunteering. Release and production access are separate responsibilities. [Governance](../GOVERNANCE.md) describes the current owner-maintained state and how an actual appointment would be recorded.
+
+## Show someone what works
+
+A two-minute visit needs no account:
+
+1. Open the fictional sample and search for “tomatoes”.
+2. Clear the search and open the lakeside photo.
+3. Export the book, clear it, then reopen the downloaded ZIP.
+4. Pick one confusing step to report with a made-up example.
+
+If you choose to share the project yourself, this is a plain description you can adapt:
+
+Clean Bookface is an open-source experiment in keeping your memories and a small circle of friends under your own control. You can try the fictional sample without signing up or running a server. Encrypted sharing is a separate, invited-circle setup. It is still a preview, with security and usability work open; contributors can help by checking one browser, one instruction or one archive fixture.
+
+Use the real demo and screenshots when showing it. Do not claim independent certification, promise permanent free hosting or imply that a maintainer community already exists.

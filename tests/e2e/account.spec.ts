@@ -76,6 +76,8 @@ test('invitation, mutual friendship, recovery and preferences work without JavaS
     await guestPage.goto('/settings');
     await guestPage.locator('input[name="compactFeed"]').check();
     await guestPage.getByRole('button', { name: 'Save preferences', exact: true }).click();
+    // Wait for the POST's redirected page before starting another navigation.
+    await expect(guestPage.getByRole('status')).toHaveText('Preferences saved.');
     await guestPage.reload();
     await expect(guestPage.locator('input[name="compactFeed"]')).toBeChecked();
     await guestPage.goto('/');
