@@ -1,5 +1,11 @@
 # Release qualification
 
+## Sample book and community entry points, 8 October 2026
+
+The new standalone [sample book and local reader](LOCAL_BOOK.md) lets someone explore fictional memories without an account or a host. It includes ZIP import, search, filters, chronological browsing, a photo viewer and portable export. This temporary reader is separate from encrypted circle storage. The README and website lead with the sample, and [five contributor tasks](CONTRIBUTOR_TASKS.md) plus [maintenance areas](COMMUNITY.md) provide bounded ways to help. GitHub Discussions is enabled; no community maintainers have been appointed.
+
+[Candidate checks and limits](../encrypted-client/QUALIFICATION.md#standalone-sample-and-local-reader--8-october-2026) record source review, automated tests and visual checks. Public deployment and CI readback are recorded separately once performed. This remains a fictional-data preview; human reviews and host security advisories are still open.
+
 ## Optional hosting build tools, 7 October 2026
 
 Maintainers can now build [project-owned hosting images](../encrypted-host/security-images/README.md) with reviewed Caddy library updates, Synapse Python and signed Debian updates, and a Restic source rebuild using patched Go dependencies. The component guides record exact inputs, independent source review, actual disposable-host evidence and failed attempts. These tools do not replace the official installer pins or the deployed preview. All candidates retain unresolved Medium-or-higher advisories; this follow-up does not qualify personal-data production.

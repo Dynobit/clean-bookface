@@ -22,7 +22,9 @@ Before that group exists, the repository owner remains responsible. An unfilled 
 
 ## Help maintain a part of the project
 
-Start with a bounded contribution through [Contributing](CONTRIBUTING.md) and the [community priorities](docs/BACKLOG.md#community-priorities). Documentation, accessibility, test maintenance, privacy review and host recovery all count as maintenance work. If you would like ongoing responsibility, open an issue describing the area you can maintain and your availability; do not post personal contact details or credentials. The owner and prospective maintainer should agree the scope before granting access.
+Start with a bounded contribution through [Contributing](CONTRIBUTING.md) and the [five starter tasks](docs/CONTRIBUTOR_TASKS.md). Documentation, accessibility, test maintenance, privacy review and host recovery all count as maintenance work. If you would like ongoing responsibility, start a Discussion describing the area you would like to maintain; do not post personal contact details or credentials. The owner and prospective maintainer should agree the scope before granting access.
+
+The two proposed areas are **documentation and usability** and **tests and imports**, described in the [community guide](docs/COMMUNITY.md). Neither has an appointed community maintainer. Chosen public handles are welcome; no fixed hours or response deadline are promised or required.
 
 A proposed appointment should identify the chosen public handle, responsibility, review arrangements and how to step back. Begin with the permissions needed for that scope. Release, website and account administration are separate responsibilities; repository access alone does not authorize production operations. Publish appointments only after the person consents. Until then, this remains a call for contributors, not a completed community handover.
 

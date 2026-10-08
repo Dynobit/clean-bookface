@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const headers = Object.fromEntries(
   readFileSync(new URL('./public/_headers', import.meta.url), 'utf8')
@@ -17,7 +18,9 @@ export default defineConfig({
     {
       name: 'preview-security-headers',
       configurePreviewServer(server) {
-        server.middlewares.use((_req, res, next) => {
+        server.middlewares.use((req, res, next) => {
+          const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+          const localBook = ['/book', '/book.html', '/book/'].includes(pathname);
           // Loopback hosts are a local preview feature, never a deployed CSP permission.
           for (const [key, value] of Object.entries(headers))
             res.setHeader(
@@ -26,7 +29,7 @@ export default defineConfig({
                 ? value.replace(
                     'connect-src https:;',
                     'connect-src https: http://127.0.0.1:* http://localhost:* http://[::1]:*;',
-                  )
+                  ) + (localBook ? ", connect-src 'none';" : '')
                 : value,
             );
           next();
@@ -36,5 +39,13 @@ export default defineConfig({
   ],
   server: { host: '127.0.0.1', port: 5174, strictPort: true },
   preview: { host: '127.0.0.1', port: 5174, strictPort: true },
-  build: { sourcemap: false },
+  build: {
+    sourcemap: false,
+    rollupOptions: {
+      input: {
+        index: fileURLToPath(new URL('./index.html', import.meta.url)),
+        book: fileURLToPath(new URL('./book.html', import.meta.url)),
+      },
+    },
+  },
 });

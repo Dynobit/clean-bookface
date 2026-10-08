@@ -8,7 +8,9 @@ A social network should tell you how your friends are doing. It shouldn't need t
 
 Clean Bookface is a small, self-hosted social network with the feel of early Facebook: a blue bar, photos, comments and friends' posts in order. It can also give your Facebook download a home. Your old memories stay private until you choose to share them.
 
-**[Join a friend](docs/ENCRYPTED_GETTING_STARTED.md#join-someone-you-know)** · **[Bring your memories](docs/ENCRYPTED_GETTING_STARTED.md#bring-your-facebook-download)** · **[Host your own circle](encrypted-host/SELF_HOST.md)** · **[Help build it](CONTRIBUTING.md)**
+**[Try a sample book](https://app.cleanbookface.org/book.html)** · **[Open a book on this device](docs/LOCAL_BOOK.md)** · **[Join a friend](docs/ENCRYPTED_GETTING_STARTED.md#join-someone-you-know)** · **[Help build it](docs/COMMUNITY.md)**
+
+Start with the sample. No account, download or server setup: browse a few fictional memories, search for a story and open a photograph. It shows the archive reader; private sharing belongs to a separate circle.
 
 _Encrypted preview · Free software for small circles. There is no official hosting service or public sign-up. Host dependencies still have unresolved security advisories, and independent human security, accessibility and usability reviews remain open. Use fictional memories while those checks are unfinished. [What has been tested](encrypted-client/QUALIFICATION.md)._
 
@@ -23,7 +25,15 @@ The encrypted app, with fictional accounts and posts. These are screenshots of w
 
 </details>
 
-## Start with a friend
+## Start on your own
+
+![The sample book: fictional memories, search and a lakeside photograph, with no account required](docs/images/local-book-desktop.png)
+
+You don't need to move your friends before you can explore a book. The [local reader](https://app.cleanbookface.org/book.html) opens supported archive files in this browser. It doesn't upload the selected files or save the opened collection in browser storage. Close or reload the page and you will need to open your original files again. You can download a separate portable copy, but keep your original Facebook download too.
+
+This is a preview, so start with the fictional sample. The local reader does not encrypt your originals or its downloaded copy. [What stays on your device, supported files and limits](docs/LOCAL_BOOK.md).
+
+## Bring a friend when you're ready
 
 A **circle** is a Clean Bookface site run by you or someone you trust. Everyone has their own account. Ask a friend who runs one for an invitation, create your account and save your recovery kit. Keep that kit somewhere private, away from this browser.
 
@@ -78,7 +88,7 @@ This is an open-source project in public preview. We'd like people to help maint
 
 Found a confusing instruction or a button that doesn't work with your keyboard? That's useful feedback. You can [report a problem](https://github.com/Dynobit/clean-bookface/issues) or suggest a change. **Use made-up examples. Never attach your Facebook download, recovery codes or private conversations.** See [security reporting](SECURITY.md) for vulnerabilities.
 
-There are useful jobs waiting: try the instructions, check a screen with a keyboard or screen reader, test a made-up archive, or rehearse a backup. [Pick a small task](docs/BACKLOG.md#community-priorities), then use [Contributing](CONTRIBUTING.md) to find the right branch and checks.
+There are [five small starter tasks](docs/CONTRIBUTOR_TASKS.md): check the sample with a keyboard or screen reader, try a fictional import in your browser, describe a confusing first step, add an archive fixture, or rehearse a disposable backup. [Community questions and maintenance roles](docs/COMMUNITY.md) explain where to start; [Contributing](CONTRIBUTING.md) covers branches and checks.
 
 The project is still owner-maintained. We welcome people who want to take responsibility for a part of it; no maintainer group has been appointed yet. [Community stewardship](GOVERNANCE.md) explains how decisions and responsibilities can be shared without giving contributors access to members’ data.
 
@@ -87,15 +97,15 @@ The project is still owner-maintained. We welcome people who want to take respon
 <details>
 <summary><strong>For hosts and developers: installation, backups and technical documentation</strong></summary>
 
-| I want to…                              | Read this                                                                                |
-| --------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Host my first circle                    | [Encrypted home installation](encrypted-host/SELF_HOST.md)                                      |
-| Choose a server and understand the bill | [Encrypted hosting choices and costs](docs/ENCRYPTED_HOSTING.md)                                                     |
-| Find advanced installation settings     | [Encrypted host operations](encrypted-host/OPERATIONS.md)                                                |
-| Back up, update or recover a circle     | [Backups and recovery](encrypted-host/OPERATIONS.md)                                                         |
-| Connect circles on different servers    | [Cross-home connections](encrypted-host/FEDERATION.md)                                             |
-| Run the local demo or change the code   | [Encrypted client development](encrypted-client/README.md)                                                 |
-| Follow the encrypted browser work      | [Browser client and privacy boundaries](encrypted-client/README.md)                |
+| I want to…                              | Read this                                                                                                                                 |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Host my first circle                    | [Encrypted home installation](encrypted-host/SELF_HOST.md)                                                                                |
+| Choose a server and understand the bill | [Encrypted hosting choices and costs](docs/ENCRYPTED_HOSTING.md)                                                                          |
+| Find advanced installation settings     | [Encrypted host operations](encrypted-host/OPERATIONS.md)                                                                                 |
+| Back up, update or recover a circle     | [Backups and recovery](encrypted-host/OPERATIONS.md)                                                                                      |
+| Connect circles on different servers    | [Cross-home connections](encrypted-host/FEDERATION.md)                                                                                    |
+| Run the local demo or change the code   | [Encrypted client development](encrypted-client/README.md)                                                                                |
+| Follow the encrypted browser work       | [Browser client and privacy boundaries](encrypted-client/README.md)                                                                       |
 | Inspect the remaining release work      | [Release evidence](docs/RELEASE.md), [backlog](docs/BACKLOG.md), [security](SECURITY.md), [Opus review and fixes](docs/REVIEW_2026_10.md) |
 
 </details>

@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Questions and early ideas
+    url: https://github.com/Dynobit/clean-bookface/discussions
+    about: Ask how to get started, shape an idea, or discuss a contribution. Use fictional examples only.
   - name: Report a security problem
     url: https://github.com/Dynobit/clean-bookface/blob/main/SECURITY.md
     about: Read how to report privately or request a private channel. Do not post exploit details in an issue.

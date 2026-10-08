@@ -34,6 +34,8 @@ The source assets are `public/assets/album-mark.svg` and `public/favicon.svg`; t
 
 `site/assets/cover-weekend.png` is a generated, fictional lakeside snapshot for the project website. It is not a member photograph or evidence of a real gathering. No private photographs were supplied. It was made with the built-in image-generation tool; the website retains the real application screenshots separately.
 
+The same unmodified image is bundled as `encrypted-client/src/sample-weekend.png` for the fictional sample book. It is embedded in the sample so opening or exporting that book does not fetch a photograph from another server.
+
 Generation prompt:
 
 > Use case: photorealistic-natural. Asset type: a fictional personal cover photograph for an independent retro social-network homepage, wide 3:1 landscape composition. An ordinary lakeside park on a summer weekend, photographed casually on a small 2009 digital compact camera: weathered wooden picnic table low in the foreground with a small plain thermos and a casually left jacket, two ordinary bicycles leaned nearby, reeds at a quiet lake and a soft distant tree line. Natural muted greens and warm blues, gentle daylight, slightly imperfect casual framing and modest compact-camera texture. Warm familiar everyday life, like a snapshot kept among friends' weekend memories, not a grand travel destination. Keep the important scene within the middle horizontal band so it crops naturally to about 800 by 210 pixels. No people or faces, no text, no logos, no branding, no watermarks, no UI, no illustrated album, no commercial stock-photo perfection, no dramatic cinematic lighting.
@@ -41,3 +43,7 @@ Generation prompt:
 ## Encrypted application screenshots
 
 `images/encrypted-feed-desktop.png` and `images/encrypted-feed-mobile.png` were captured from the built encrypted app on 6 October 2026. Fictional accounts imported and deliberately shared the existing album illustration, then exchanged a post, comment and reaction through actual encrypted rooms. The mobile capture uses a 390-pixel viewport. No real member content, credentials or recovery material appears. The older `feed-desktop.png` and `feed-mobile.png` remain v0.1 screenshots.
+
+## Standalone sample screenshot
+
+`images/local-book-desktop.png` was captured from the built local reader on 8 October 2026 at 1440 pixels wide. It shows only the bundled fictional Alex Rowan collection and the generated lakeside image described above. No archive, member account, browser profile or private information was supplied.

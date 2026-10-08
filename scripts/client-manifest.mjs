@@ -18,7 +18,7 @@ export function clientManifest(directory) {
       if (
         !entry.isFile() ||
         !lstatSync(full).isFile() ||
-        !/^(?:index\.html|_headers|favicon\.svg|album-mark\.svg|LICENSE\.txt|THIRD_PARTY_NOTICES\.txt|assets\/[A-Za-z0-9_.-]+\.(?:js|css|wasm))$/.test(
+        !/^(?:(?:index|book)\.html|_headers|favicon\.svg|album-mark\.svg|LICENSE\.txt|THIRD_PARTY_NOTICES\.txt|assets\/[A-Za-z0-9_.-]+\.(?:js|css|wasm))$/.test(
           name,
         )
       )
@@ -34,6 +34,7 @@ export function clientManifest(directory) {
   visit(directory);
   if (
     !files.some((file) => file.path === 'index.html') ||
+    !files.some((file) => file.path === 'book.html') ||
     !files.some((file) => file.path.endsWith('.wasm'))
   )
     throw new Error('Incomplete browser build');

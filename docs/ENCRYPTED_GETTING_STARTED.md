@@ -4,6 +4,8 @@ This guide is for the encrypted browser version. It is a preview: use made-up me
 
 ## Join someone you know
 
+Just looking around? [Open the fictional sample book](https://app.cleanbookface.org/book.html) without an account or invitation. Its [local archive reader](LOCAL_BOOK.md) opens supported ZIPs temporarily in your browser. A circle adds the accounts, saved encrypted memories and private sharing described below.
+
 1. **Ask a friend for an invitation.** They need to run a Clean Bookface storage home. There is no public directory or official free hosting service.
 2. **Open the invitation in the trusted browser app.** Check its address before entering anything. Your storage home and the app that handles your keys should have different operators. The invitation fills in your home and single-use code.
 3. **Choose your account and password.** You do not need GitHub, a terminal or a hosting account.

@@ -10,10 +10,12 @@ const forbidden =
 const allowedImages = new Set([
   'public/assets/our-memories.png',
   'site/assets/cover-weekend.png',
+  'encrypted-client/src/sample-weekend.png',
   'docs/images/feed-desktop.png',
   'docs/images/feed-mobile.png',
   'docs/images/encrypted-feed-desktop.png',
   'docs/images/encrypted-feed-mobile.png',
+  'docs/images/local-book-desktop.png',
   'tests/fixtures/synthetic/facebook/photos/synthetic-postcard.png',
 ]);
 // Filesystem roots are case-sensitive: /users/... is also an HTTP route.

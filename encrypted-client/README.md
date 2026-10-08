@@ -6,6 +6,8 @@ This is the encrypted preview, maintained on `main`. Independent human security,
 
 **[Start here: a guide for people](../docs/ENCRYPTED_GETTING_STARTED.md)** · **[Host a home](../encrypted-host/SELF_HOST.md)** · **[What has been tested](QUALIFICATION.md)**
 
+The same build also includes a separate [standalone local book](../docs/LOCAL_BOOK.md) at `/book.html`. It opens a fictional sample or selected ZIP archives in page memory, without accounts or a storage home. It does not save an encrypted collection, contact friends or join a circle. Use fictional data only while independent human review and real-export qualification remain unfinished.
+
 ## What you can do
 
 - Join through a single-use invitation, save a recovery kit and recover in a clean browser.
@@ -28,6 +30,22 @@ Waiting changes belong to the browser that created them. Keep that browser until
 
 The streaming importer bounds input, decompression and retained batches. Current guard limits are 10 GiB input/expanded ZIP bytes, 64 selected files and 64 MiB per original attachment. Portable single-part exports retain a 256 MiB input limit. Nested v0.1 account exports stream through encrypted temporary browser storage; their source and expansion budgets remain bounded. A guard limit is not a browser capacity claim; see the measured qualification before choosing a workload.
 
+## Try the standalone local book
+
+From `encrypted-client/`, install the locked dependencies and build the static preview:
+
+```sh
+npm ci --ignore-scripts
+npm run build
+npm run preview
+```
+
+Open `http://127.0.0.1:5174/book.html`. No Docker, Matrix home, account, invitation or contact list is needed. The build emits both `dist/index.html` for the encrypted circle client and `dist/book.html` for the local book. A production host may route `/book` to `book.html`; use the explicit filename for local checks. The public entry point is [the sample book](https://app.cleanbookface.org/book.html); dated deployment evidence belongs in [qualification](QUALIFICATION.md).
+
+The local book's restrictive content policy blocks network connections from the page. Use the built preview for this path: Vite development mode injects a development client that needs network connections, so `npm run dev` is not its acceptance environment. The preview serves the configured response headers as well as the page's own restrictive policy. Stop the preview before starting another process on port 5174.
+
+Try search, record filters, chronological order and the photo viewer with the built-in fictional sample. To exercise import, put the contents of `../tests/fixtures/synthetic/facebook/` in a ZIP and select it through **Open my archive**. Only ZIP selection is supported, not loose files, folders or HTML exports. Reloading returns to the sample; **Clear book** drops the in-memory collection. **Export book** downloads an unencrypted portable copy of supported imported records and attachments. Keep original files separately. See the [local-book guide](../docs/LOCAL_BOOK.md) for import and photo-preview limits.
+
 ## Try a fictional circle locally
 
 1. Use a current browser with WebCrypto Ed25519, WebAssembly, IndexedDB and Web Locks, and Node within `package.json`'s supported range.
@@ -39,7 +57,7 @@ Invitation links carry `#home=https%3A%2F%2Fhome.example.org&invite=ONE_TIME_COD
 
 ## Build, test and publish
 
-Run `npm run check`, `npm test` and `npm run build`. The build includes the Rust crypto WebAssembly locally; no third-party script CDN is needed. Dependencies and test tools are declared in this package.
+Run `npm run check`, `npm test` and `npm run build`. The build includes both browser entry points and the Rust crypto WebAssembly locally; no third-party script CDN is needed. Dependencies and test tools are declared in this package.
 
 For browser checks, install Chromium with `npx playwright install chromium`. The root `scripts/encrypted-browser-ci.mjs` creates isolated, fictional host fixtures, builds the client and runs a named suite. It refuses repository-local runtime directories and cleans only its own resources. See `.github/workflows/ci.yml` for the suites used in CI. Standby and federation qualification remain explicit separate procedures.
 

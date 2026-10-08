@@ -27,8 +27,8 @@ jobs:
         working-directory: encrypted-client
       - run: npx --no-install playwright install --with-deps chromium
         working-directory: encrypted-client
-      - name: Browser photo and durable retry checks
-        run: npx --no-install playwright test --config playwright.config.ts shared-photo.spec.ts outbox.spec.ts
+      - name: Browser sample, local import, photo and durable retry checks
+        run: npx --no-install playwright test --config playwright.config.ts local-book.spec.ts shared-photo.spec.ts outbox.spec.ts
         working-directory: encrypted-client
       - name: Verify actual legacy HTTP export migration
         run: npx --no-install tsx --test tests/legacy-import.integration.ts

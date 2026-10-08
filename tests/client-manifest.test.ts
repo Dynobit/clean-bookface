@@ -10,9 +10,13 @@ test('browser artifact manifest detects changed files and rejects unexpected fil
   try {
     mkdirSync(join(root, 'assets'));
     writeFileSync(join(root, 'index.html'), '<title>Fictional client</title>');
+    writeFileSync(join(root, 'book.html'), '<title>Fictional local book</title>');
     writeFileSync(join(root, 'assets/crypto-test.wasm'), Buffer.from([0, 97, 115, 109]));
     const before = clientManifest(root);
-    assert.equal(before.files.length, 2);
+    assert.equal(before.files.length, 3);
+    rmSync(join(root, 'book.html'));
+    assert.throws(() => clientManifest(root), /Incomplete/);
+    writeFileSync(join(root, 'book.html'), '<title>Fictional local book</title>');
     writeFileSync(join(root, 'index.html'), '<title>Changed</title>');
     assert.notDeepEqual(clientManifest(root), before);
     writeFileSync(join(root, 'runtime.json'), '{}');

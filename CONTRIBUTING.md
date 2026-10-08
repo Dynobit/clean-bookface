@@ -2,25 +2,25 @@
 
 Start with a small issue or a focused pull request. Explain the behavior a person should see, and how you verified it. Keep the application understandable to the next person who has to run it.
 
-Read [the member guide](docs/ENCRYPTED_GETTING_STARTED.md) to understand the experience we are trying to make easy, and [community stewardship](GOVERNANCE.md) for the path to shared maintenance. The public preview welcomes issues and focused pull requests; a public maintainer community has not yet been established.
+Start with [the community guide](docs/COMMUNITY.md) and [five starter tasks](docs/CONTRIBUTOR_TASKS.md) for no-code and testing contributions. Read [the member guide](docs/ENCRYPTED_GETTING_STARTED.md) to understand the experience we are trying to make easy, and [community stewardship](GOVERNANCE.md) for the path to shared maintenance. The public preview welcomes issues and focused pull requests; a public maintainer community has not yet been established.
 
 ## Choose a starting point
 
-You do not need to run a server or write code to contribute. Check the [small, scoped priorities](docs/BACKLOG.md#community-priorities) and existing issues before starting; comment with the task you want to take so people can avoid duplicate work. A small documentation correction can go straight to a pull request. Discuss a larger change first, with the user need and a proposed acceptance check.
+You do not need to run a server or write code to contribute. Check the [small, scoped priorities](docs/BACKLOG.md#community-priorities) and existing issues before starting; comment with the task you want to take so people can avoid duplicate work. A small documentation correction can go straight to a pull request. Use [Discussions](https://github.com/Dynobit/clean-bookface/discussions) for questions or ideas still taking shape, issues for reproducible bugs and scoped improvements, and [private security reporting](SECURITY.md) for vulnerabilities. Discuss a larger change first, with the user need and a proposed acceptance check.
 
-| Interest             | Start here                                                                              | Useful first result                                                                                                         |
-| -------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Interest             | Start here                                                                                             | Useful first result                                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | Documentation        | [Member guide](docs/ENCRYPTED_GETTING_STARTED.md) and [client development](encrypted-client/README.md) | Follow one journey from a clean start and fix a confusing step, stating what you actually tried.                            |
-| Accessibility        | [Usability check](docs/USABILITY_CHECK.md) and the fictional demo                       | Reproduce one keyboard, screen-reader or narrow-screen problem; include browser/assistive-tool versions and verify the fix. |
-| Testing and imports  | [Client development](encrypted-client/README.md) and `encrypted-client/tests/`                                         | Add a small synthetic fixture for a missing case and a behavioral regression test.                                          |
-| Security and privacy | [Encryption contract](docs/ENCRYPTION.md) and [Security](SECURITY.md)                         | Review one access boundary. Report vulnerabilities privately; use public issues for non-sensitive review scope only.        |
-| Hosting and recovery | [Installation](encrypted-host/SELF_HOST.md) and [Operations](encrypted-host/OPERATIONS.md)                    | Rehearse one documented install or restore on a disposable host and report sanitized results, including failures.           |
+| Accessibility        | [Usability check](docs/USABILITY_CHECK.md) and the fictional demo                                      | Reproduce one keyboard, screen-reader or narrow-screen problem; include browser/assistive-tool versions and verify the fix. |
+| Testing and imports  | [Client development](encrypted-client/README.md) and `encrypted-client/tests/`                         | Add a small synthetic fixture for a missing case and a behavioral regression test.                                          |
+| Security and privacy | [Encryption contract](docs/ENCRYPTION.md) and [Security](SECURITY.md)                                  | Review one access boundary. Report vulnerabilities privately; use public issues for non-sensitive review scope only.        |
+| Hosting and recovery | [Installation](encrypted-host/SELF_HOST.md) and [Operations](encrypted-host/OPERATIONS.md)             | Rehearse one documented install or restore on a disposable host and report sanitized results, including failures.           |
 
 ## Pick the right branch
 
 The repository contains two applications with different privacy boundaries. The encrypted preview lives in `encrypted-client/` and `encrypted-host/`. The older v0.1 Node server remains at the repository root, with its original tests and migration exporter. Its host can read stored content; it is not upgraded by changes to the browser app.
 
-Target reviewed changes at `main` after checking open pull requests and ownership. The encrypted build originated in [PR #4](https://github.com/Dynobit/clean-bookface/pull/4); read its current state before taking overlapping work. Use the exact package's setup and checks. Comments, reactions, account closure, moderation, migration, streaming imports and offsite recovery now have integrated paths and automated evidence. Independent human security, accessibility and usability reviews remain open. [Qualification and limits](encrypted-client/QUALIFICATION.md).
+Target reviewed changes at `main` after checking open pull requests and ownership. Use the exact package's setup and checks. Comments, reactions, account closure, moderation, migration, streaming imports and offsite recovery now have integrated paths and automated evidence. Independent human security, accessibility and usability reviews remain open. [Qualification and limits](encrypted-client/QUALIFICATION.md).
 
 ## Send a reviewable change
 

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'none'; connect-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <title>Your book · Clean Bookface</title>
+    <link rel="icon" href="/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip" href="#memories">Skip to memories</a>
+    <header class="top">
+      <div>
+        <a class="brand" href="/book.html"
+          >clean bookface<span>A quieter place for your memories.</span></a
+        ><span class="top-note">YOUR BOOK · ON THIS PAGE</span>
+      </div>
+    </header>
+    <div class="layout">
+      <aside>
+        <div class="portrait" aria-hidden="true">a<span>r</span></div>
+        <h1 id="book-title">Alex’s book</h1>
+        <p id="book-subtitle">A fictional collection. Make yourself at home.</p>
+        <nav aria-label="Memory kinds" id="filters"></nav>
+        <div class="aside-note">
+          <strong>Your memories, your pace.</strong>
+          <p>No ranking. No ads.<br />No account needed here.</p>
+        </div>
+      </aside>
+      <main>
+        <section class="intro">
+          <p class="eyebrow" id="mode">THE SAMPLE BOOK</p>
+          <h2>A life in little moments.</h2>
+          <p>Posts, photos, and conversations. Together again, with room to look back.</p>
+          <div class="actions">
+            <label class="button primary" for="files">Open my archive</label
+            ><input
+              id="files"
+              type="file"
+              multiple
+              accept=".zip"
+              aria-label="Open my archive"
+            /><button id="sample">Return to sample</button>
+          </div>
+          <p class="hint">
+            Choose Facebook downloads in JSON format, supplied as ZIP files. Select ZIP parts
+            together, or a portable Clean Bookface ZIP. Up to 8 files / 256 MiB compressed. HTML
+            exports are not supported.
+          </p>
+        </section>
+        <section class="privacy">
+          <strong>A temporary book, just for this page.</strong>
+          <p>
+            Files are read in this browser and are not uploaded or shared. This collection lasts
+            only while the page stays open. Keep your originals. This is not encryption at rest, and
+            clearing does not erase disk files or downloads.
+          </p>
+          <details>
+            <summary>Preview limits &amp; privacy</summary>
+            <p>
+              Real-export compatibility and independent human accessibility/security review remain
+              incomplete. Only supported raster photos are displayed; other attachments stay in
+              portable exports. Browser extensions and your device can access what you open. Exports
+              are unencrypted files containing private records.
+            </p>
+          </details>
+        </section>
+        <div class="toolbar">
+          <label
+            >Search memories<input
+              id="search"
+              type="search"
+              placeholder="A word, a place, a moment…" /></label
+          ><label
+            >Order<select id="sort">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select></label
+          >
+        </div>
+        <div class="collection-bar">
+          <p id="count"></p>
+          <div><button id="export">Export book</button><button id="clear">Clear book</button></div>
+        </div>
+        <div id="status" role="status" aria-live="polite"></div>
+        <button id="cancel" hidden>Cancel opening</button>
+        <div id="warnings"></div>
+        <section id="memories" aria-label="Memories" tabindex="-1"></section>
+        <div class="pagination">
+          <button id="previous">Previous</button><span id="page"></span
+          ><button id="next">Next</button>
+        </div>
+        <footer>
+          Clean Bookface · A personal archive preview.
+          <a href="https://cleanbookface.org">About the project</a> ·
+          <a href="https://github.com/Dynobit/clean-bookface">GitHub &amp; community</a> ·
+          <a href="/THIRD_PARTY_NOTICES.txt">Third-party notices</a>
+        </footer>
+      </main>
+    </div>
+    <dialog id="photo-dialog" aria-labelledby="photo-title">
+      <div class="photo-dialog-bar">
+        <h2 id="photo-title">Photo</h2>
+        <button id="photo-close" autofocus>Close photo</button>
+      </div>
+      <img id="photo-large" alt="" />
+    </dialog>
+    <script type="module" src="/src/local-main.ts"></script>
+  </body>
+</html>

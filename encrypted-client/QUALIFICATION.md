@@ -1,6 +1,20 @@
 # Encrypted version: what has actually been tested
 
-Development evidence through 6 October 2026. This is a separate successor to the public v0.1 preview. The independent browser client is published as v0.2.0-preview.2. It does not replace an existing installation and is not ready for personal archives.
+Development evidence through 8 October 2026. This is a separate successor to the public v0.1 preview. The independent browser client is published as v0.2.0-preview.2. It does not replace an existing installation and is not ready for personal archives.
+
+## Standalone sample and local reader — 8 October 2026
+
+The `0.2.0-preview.3` candidate adds a separate `/book.html` entry point. A fictional sample, ZIP import, search, category filters, chronological sorting, photo viewing and portable export work without a member account or storage home. The reader keeps its collection in page memory; this is not encrypted persistence. Clearing, replacement, navigation and restored-page handling discard that collection. Original files and downloaded exports are not erased.
+
+The complete client suite passed **192 tests with no failures or skips**. The root application passed **316 tests, with six environment-dependent skips**; CI must supply the missing environment. Type checks, builds and formatting passed. Nine built-preview browser cases passed: three local-reader journeys and six existing photo-preparation/durable-retry checks. The local journeys cover fictional sample navigation and keyboard photo controls, phone layout, multipart imports, inert hostile text, rejected unsafe paths, warnings, no post-open requests or storage writes, exact portable round trips, and an older private archive ZIP.
+
+Actual navigation away/back and reload discarded the imported collection. Synthetic persisted-page events separately exercised lifecycle handlers; this does not prove the browser used its back-forward cache. The browser legacy fixture is a private archive ZIP, not a nested account-export ZIP. Delayed export invalidation is also unit-tested; its four lifecycle labels do not represent four browser race tests.
+
+Independent model source review found ZIP-selection wording and unbounded decoded photo size; both were fixed. PNG/JPEG/WebP headers are checked before decoding, with 8 million pixels per photo and 24 million per page. Skipped previews preserve successfully imported originals in exports. A later visual check found the idle Cancel control visible because of a CSS override; the fix passed all three local browser journeys with new idle/post-import assertions. Progress updates no longer sort and redraw the entire collection for every archive entry.
+
+Fresh desktop and 390/320-pixel checks passed for the sample and project website: six layouts, loaded images, no page errors or horizontal overflow. The preview's local-book policy denied even a same-origin fetch. Cloudflare aliases and served production bytes still require publication readback; preview middleware is not that evidence.
+
+Failed attempts remain accounted for: two initial browser expectations assumed traversal input would be partially accepted and read results before import completion; the corrected cases retain refusal and wait for actual completion. Two visual-harness attempts served the source site rather than its built asset directory; the corrected built-site check passed. An initial screenshot harness used an incorrect module path. These are not passing runs. Independent human security, accessibility, usability, real-export compatibility and additional-browser qualification remain open. The existing host advisory gates remain unresolved.
 
 ## Published Opus 5.5 follow-up — 6 October 2026
 

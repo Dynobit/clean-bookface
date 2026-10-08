@@ -10,3 +10,12 @@
 
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+
+/book
+  Content-Security-Policy: connect-src 'none';
+
+/book.html
+  Content-Security-Policy: connect-src 'none';
+
+/book/
+  Content-Security-Policy: connect-src 'none';
